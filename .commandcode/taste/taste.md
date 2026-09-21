@@ -1,4 +1,0 @@
-- Prefers creating a new Django app for each new feature rather than extending existing apps. Confidence: 0.7
-- Prioritizes database optimization (indexes, efficient queries) when building features. Confidence: 0.7
-- Prefers storing feature-specific data in dedicated tables (snapshotting shared records) rather than FK-referencing the source data. Confidence: 0.6
-- Prefers thorough, complete API documentation for app endpoints (auth, permissions, request/response examples, status codes). Confidence: 0.6
