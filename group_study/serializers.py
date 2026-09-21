@@ -49,6 +49,7 @@ class StudyGroupSerializer(serializers.ModelSerializer):
     created_by = UserSummarySerializer(read_only=True)
     member_count = serializers.IntegerField(read_only=True)
     quiz_count = serializers.IntegerField(read_only=True)
+    unread_message_count = serializers.IntegerField(read_only=True, default=0)
     my_role = serializers.SerializerMethodField()
 
     class Meta:
@@ -61,6 +62,7 @@ class StudyGroupSerializer(serializers.ModelSerializer):
             'created_by',
             'member_count',
             'quiz_count',
+            'unread_message_count',
             'my_role',
             'created_at',
             'updated_at',

@@ -111,6 +111,7 @@ Returns the groups the caller belongs to (paginated). Each item:
   "created_by": { "id": 4, "username": "alice", "first_name": "Alice", "last_name": "Rahman", "email": "alice@gmail.com" },
   "member_count": 12,
   "quiz_count": 5,
+  "unread_message_count": 3,
   "my_role": "ADMIN",
   "created_at": "2026-09-21T08:00:00Z",
   "updated_at": "2026-09-21T08:00:00Z"
@@ -118,6 +119,9 @@ Returns the groups the caller belongs to (paginated). Each item:
 ```
 
 `my_role` is `"ADMIN"` or `"MEMBER"`.
+
+`unread_message_count` counts chat messages from other members that arrived
+after the caller last read the group chat (their own messages never count).
 
 ### Create a group
 
@@ -281,6 +285,24 @@ Response: `201` with the created message object (same shape as the list item).
 
 Every other member receives a push + in-app notification (`group_study_message`)
 with the sender name as the title and the message body (truncated to 200 chars).
+
+Sending also marks the chat as read for the sender, so their own message never
+appears in `unread_message_count`.
+
+### Mark messages read
+
+`POST /groups/<group_id>/messages/read/`
+
+Access: any member. No body. Clears the caller's unread chat badge.
+
+Response: `200`
+
+```json
+{ "detail": "Messages marked as read.", "unread_message_count": 0 }
+```
+
+The app calls this when the chat tab opens and whenever new messages arrive
+while the chat is on screen.
 
 ---
 

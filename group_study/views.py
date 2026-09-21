@@ -1,5 +1,18 @@
+from datetime import datetime, timezone as dt_timezone
+
 from django.db import transaction
-from django.db.models import Count, Exists, OuterRef, Prefetch, Q, Subquery
+from django.db.models import (
+    Count,
+    DateTimeField,
+    Exists,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+)
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, permissions, status
@@ -60,6 +73,33 @@ from .services import (
 
 # ── Queryset helpers ─────────────────────────────────────────────────────────
 
+def get_unread_message_count_expression(user):
+    """Per-group count of messages the user has not read yet.
+
+    A membership with ``last_read_at = null`` has never opened the chat, so
+    every message from another sender counts as unread.
+    """
+    last_read_subquery = StudyGroupMembership.objects.filter(
+        group=OuterRef('pk'),
+        user=user,
+    ).values('last_read_at')[:1]
+    unread_subquery = GroupMessage.objects.filter(
+        group=OuterRef('pk'),
+        created_at__gt=Coalesce(
+            Subquery(last_read_subquery),
+            Value(datetime(1970, 1, 1, tzinfo=dt_timezone.utc)),
+            output_field=DateTimeField(),
+        ),
+    ).exclude(sender=user).order_by().values('group').annotate(
+        total=Count('id'),
+    ).values('total')
+    return Coalesce(
+        Subquery(unread_subquery),
+        Value(0),
+        output_field=IntegerField(),
+    )
+
+
 def get_group_list_queryset(user):
     role_subquery = StudyGroupMembership.objects.filter(
         group=OuterRef('pk'),
@@ -69,6 +109,7 @@ def get_group_list_queryset(user):
         member_count=Count('memberships', distinct=True),
         quiz_count=Count('quizzes', distinct=True),
         my_role=Subquery(role_subquery),
+        unread_message_count=get_unread_message_count_expression(user),
     ).order_by('name', 'id')
 
 
@@ -87,6 +128,8 @@ def get_quiz_queryset(user, include_questions=False):
         user=user,
         is_completed=False,
     )
+    # Aggregates drop Meta.ordering (Django omits default ordering on GROUP BY),
+    # so order explicitly to keep pagination deterministic.
     queryset = GroupStudyQuiz.objects.select_related('group', 'created_by').annotate(
         question_count=Count('questions', distinct=True),
         completed_attempt_count=Count(
@@ -95,7 +138,7 @@ def get_quiz_queryset(user, include_questions=False):
             distinct=True,
         ),
         has_in_progress_attempt=Exists(active_attempt),
-    )
+    ).order_by('-created_at', '-id')
     if include_questions:
         queryset = queryset.prefetch_related(
             Prefetch(
@@ -274,7 +317,7 @@ class GroupMessageListCreateView(generics.ListCreateAPIView):
     def get_group(self):
         if not hasattr(self, '_group'):
             group = get_group_object(self.kwargs['group_id'])
-            ensure_member(group, self.request.user)
+            self._membership = ensure_member(group, self.request.user)
             self._group = group
         return self._group
 
@@ -294,6 +337,11 @@ class GroupMessageListCreateView(generics.ListCreateAPIView):
         body = serializer.validated_data['body']
         message = GroupMessage.objects.create(group=group, sender=request.user, body=body)
 
+        # Sending implies the sender has seen the conversation, so their own
+        # messages never show up as unread.
+        self._membership.last_read_at = timezone.now()
+        self._membership.save(update_fields=['last_read_at', 'updated_at'])
+
         sender_name = request.user.get_full_name() or request.user.username
         notify_members(
             group,
@@ -307,6 +355,20 @@ class GroupMessageListCreateView(generics.ListCreateAPIView):
 
         response_serializer = GroupMessageSerializer(message, context=self.get_serializer_context())
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class GroupMessageReadView(APIView):
+    permission_classes = [IsAuthenticatedUserOnly]
+
+    def post(self, request, group_id):
+        group = get_group_object(group_id)
+        membership = ensure_member(group, request.user)
+        membership.last_read_at = timezone.now()
+        membership.save(update_fields=['last_read_at', 'updated_at'])
+        return Response({
+            'detail': 'Messages marked as read.',
+            'unread_message_count': 0,
+        })
 
 
 # ── Quiz views ───────────────────────────────────────────────────────────────
@@ -328,9 +390,12 @@ class GroupStudyQuizListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         group = self.get_group()
+        # The list serializer never renders question content, so skip the
+        # expensive questions/answers prefetch here. Detail endpoints load
+        # questions instead.
         queryset = get_quiz_queryset(
             self.request.user,
-            include_questions=self.is_admin(),
+            include_questions=False,
         ).filter(group=group)
         if not self.is_admin():
             queryset = queryset.filter(is_published=True)
