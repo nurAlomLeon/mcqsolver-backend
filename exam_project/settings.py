@@ -38,7 +38,7 @@ SECRET_KEY = 'django-insecure-vt^qaq9(m_w%5nrwn0_(b^7tnguqy=wf52=rj45rbx942u4#ws
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['qb.mcqsolver.com', 'localhost', '127.0.0.1']
 
 
 # Application definition
@@ -111,8 +111,17 @@ WSGI_APPLICATION = 'exam_project.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'mcqsolve_qb',
+        'HOST': 'localhost',
+        'PORT': '2083',
+        'USER': 'mcqsolve_leo',
+        'PASSWORD': 'user1@01751916491',
+        'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', 60)),
+        'CONN_HEALTH_CHECKS': True,
+        'OPTIONS': {
+            'charset': 'utf8mb4'
+        },
     }
 }
 
