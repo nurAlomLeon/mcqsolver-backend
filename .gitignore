@@ -66,3 +66,4 @@ tmp/
 .DS_Store
 Thumbs.db
 exam_project/settings.py
+.git/**
