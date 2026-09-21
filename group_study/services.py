@@ -41,6 +41,19 @@ def ensure_admin(group, user):
     return membership
 
 
+def ensure_quiz_manager(quiz, user):
+    """Admins can manage every quiz; other members only the ones they created."""
+    membership = ensure_member(quiz.group, user)
+    if (
+        membership.role == StudyGroupMembership.Role.ADMIN
+        or quiz.created_by_id == user.id
+    ):
+        return membership
+    raise PermissionDenied(
+        'Only the quiz creator or a group admin can manage this quiz.'
+    )
+
+
 def add_membership(group, user, role=StudyGroupMembership.Role.MEMBER):
     membership, created = StudyGroupMembership.objects.update_or_create(
         group=group,

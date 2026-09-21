@@ -10,6 +10,7 @@ from .models import (
     GroupStudyAnswer,
     GroupStudyQuestion,
     GroupStudyQuiz,
+    GroupStudyQuizAttempt,
     StudyGroup,
     StudyGroupMembership,
 )
@@ -45,12 +46,12 @@ class GroupStudyApiTests(TestCase):
     def _group_url(self):
         return f'/api/group-study/groups/{self.group.id}/'
 
-    def _create_quiz(self, published=True):
+    def _create_quiz(self, published=True, created_by=None):
         now = timezone.now()
         quiz = GroupStudyQuiz.objects.create(
             group=self.group,
             name='Weekly Physics',
-            created_by=self.admin,
+            created_by=created_by or self.admin,
             start_at=now,
             end_at=now + timedelta(hours=1),
             duration_minutes=15,
@@ -75,6 +76,20 @@ class GroupStudyApiTests(TestCase):
             is_correct=False,
         )
         return quiz
+
+    def _completed_attempt(self, quiz, user, score, completed_at=None):
+        return GroupStudyQuizAttempt.objects.create(
+            user=user,
+            quiz=quiz,
+            expires_at=timezone.now(),
+            end_time=completed_at or timezone.now(),
+            score=score,
+            is_completed=True,
+            total_questions=1,
+            correct_mark=1,
+            wrong_mark=0,
+            unanswered_mark=0,
+        )
 
     def test_unread_message_count_and_mark_read(self):
         GroupMessage.objects.create(
@@ -163,3 +178,134 @@ class GroupStudyApiTests(TestCase):
 
         self.assertEqual(admin_response.data['count'], 2)
         self.assertEqual(member_response.data['count'], 1)
+
+    def test_member_sees_and_manages_their_own_draft_quiz(self):
+        quiz = self._create_quiz(published=False, created_by=self.member)
+
+        response = self.member_client.get(f'{self._group_url()}quizzes/')
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], quiz.id)
+        self.assertEqual(
+            response.data['results'][0]['created_by']['username'],
+            'bob',
+        )
+
+        response = self.member_client.get(
+            f'/api/group-study/quizzes/{quiz.id}/',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('questions', response.data)
+
+        response = self.member_client.post(
+            f'/api/group-study/quizzes/{quiz.id}/publish/',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['is_published'])
+
+    def test_member_can_create_a_quiz(self):
+        now = timezone.now()
+        response = self.member_client.post(
+            f'{self._group_url()}quizzes/',
+            {
+                'name': 'Member quiz',
+                'start_at': now.isoformat(),
+                'end_at': (now + timedelta(hours=1)).isoformat(),
+                'questions': [
+                    {
+                        'question_text': 'Capital of France?',
+                        'answers': [
+                            {'text': 'Paris', 'is_correct': True},
+                            {'text': 'Rome', 'is_correct': False},
+                        ],
+                    },
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['created_by']['username'], 'bob')
+        self.assertEqual(response.data['question_count'], 1)
+
+    def test_member_cannot_manage_another_members_quiz(self):
+        quiz = self._create_quiz(published=False)
+
+        response = self.member_client.patch(
+            f'/api/group-study/quizzes/{quiz.id}/',
+            {'name': 'Hijacked'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+        response = self.member_client.post(
+            f'/api/group-study/quizzes/{quiz.id}/publish/',
+        )
+        self.assertEqual(response.status_code, 403)
+
+        response = self.member_client.delete(
+            f'/api/group-study/quizzes/{quiz.id}/',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_group_leaderboard_sums_best_score_per_quiz(self):
+        first = self._create_quiz()
+        second = self._create_quiz()
+
+        # Bob: 10 + 4 = 14 across two quizzes; an older 6 doesn't count.
+        self._completed_attempt(first, self.member, 10)
+        self._completed_attempt(first, self.member, 6)
+        self._completed_attempt(second, self.member, 4)
+        # Alice: 8 + 8 = 16.
+        self._completed_attempt(first, self.admin, 8)
+        self._completed_attempt(second, self.admin, 8)
+
+        response = self.member_client.get(
+            f'{self._group_url()}leaderboard/',
+        )
+        self.assertEqual(response.status_code, 200)
+        results = response.data
+        self.assertEqual([entry['user']['username'] for entry in results], [
+            'alice',
+            'bob',
+        ])
+        self.assertEqual(results[0]['score'], 16)
+        self.assertEqual(results[0]['quizzes_attempted'], 2)
+        self.assertEqual(results[1]['score'], 14)
+        self.assertFalse(results[0]['is_current_user'])
+        self.assertTrue(results[1]['is_current_user'])
+        self.assertEqual([entry['rank'] for entry in results], [1, 2])
+
+    def test_quiz_leaderboard_uses_best_attempt(self):
+        quiz = self._create_quiz()
+        self._completed_attempt(quiz, self.member, 4)
+        self._completed_attempt(quiz, self.member, 9)
+        self._completed_attempt(quiz, self.admin, 7)
+
+        response = self.member_client.get(
+            f'/api/group-study/quizzes/{quiz.id}/leaderboard/',
+        )
+        self.assertEqual(response.status_code, 200)
+        results = response.data
+        self.assertEqual([entry['user']['username'] for entry in results], [
+            'bob',
+            'alice',
+        ])
+        self.assertEqual(results[0]['score'], 9)
+        self.assertEqual(results[0]['rank'], 1)
+        self.assertTrue(results[0]['is_current_user'])
+
+    def test_external_users_cannot_read_leaderboards(self):
+        outsider = User.objects.create_user(
+            username='eve',
+            email='eve@example.com',
+            password='pw12345!',
+        )
+        outsider_client = APIClient()
+        outsider_client.force_authenticate(outsider)
+        quiz = self._create_quiz()
+
+        response = outsider_client.get(f'{self._group_url()}leaderboard/')
+        self.assertEqual(response.status_code, 403)
+        response = outsider_client.get(
+            f'/api/group-study/quizzes/{quiz.id}/leaderboard/',
+        )
+        self.assertEqual(response.status_code, 403)

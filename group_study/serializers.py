@@ -114,6 +114,7 @@ class GroupStudyQuizSummarySerializer(serializers.ModelSerializer):
     unanswered_mark = serializers.SerializerMethodField()
     maximum_score = serializers.SerializerMethodField()
     attempt_status = serializers.SerializerMethodField()
+    created_by = UserSummarySerializer(read_only=True)
 
     class Meta:
         model = GroupStudyQuiz
@@ -131,6 +132,7 @@ class GroupStudyQuizSummarySerializer(serializers.ModelSerializer):
             'question_count',
             'maximum_score',
             'attempt_status',
+            'created_by',
             'created_at',
         ]
 

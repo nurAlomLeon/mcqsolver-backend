@@ -1,11 +1,15 @@
 from datetime import datetime, timezone as dt_timezone
+from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import (
     Count,
     DateTimeField,
     Exists,
     IntegerField,
+    Max,
+    Min,
     OuterRef,
     Prefetch,
     Q,
@@ -50,6 +54,7 @@ from .serializers import (
     StudyGroupMembershipSerializer,
     StudyGroupSerializer,
     StudyGroupWriteSerializer,
+    decimal_as_number,
 )
 from .services import (
     add_membership,
@@ -59,6 +64,7 @@ from .services import (
     ensure_admin,
     ensure_member,
     ensure_quiz_available,
+    ensure_quiz_manager,
     finalize_attempt_submission,
     get_membership,
     notify_members,
@@ -398,7 +404,10 @@ class GroupStudyQuizListCreateView(generics.ListCreateAPIView):
             include_questions=False,
         ).filter(group=group)
         if not self.is_admin():
-            queryset = queryset.filter(is_published=True)
+            # Members see published quizzes plus their own drafts.
+            queryset = queryset.filter(
+                Q(is_published=True) | Q(created_by=self.request.user),
+            )
         return queryset
 
     def get_serializer_class(self):
@@ -408,7 +417,8 @@ class GroupStudyQuizListCreateView(generics.ListCreateAPIView):
 
     def create(self, request, *args, **kwargs):
         group = self.get_group()
-        ensure_admin(group, request.user)
+        # Any member can create a quiz for the group.
+        ensure_member(group, request.user)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         question_ids = serializer.validated_data.pop('question_ids', None)
@@ -448,20 +458,23 @@ class GroupStudyQuizDetailView(generics.RetrieveUpdateDestroyAPIView):
         quiz = super().get_object()
         membership = ensure_member(quiz.group, self.request.user)
         self._is_admin = membership.role == StudyGroupMembership.Role.ADMIN
-        if not self._is_admin and not quiz.is_published:
+        self._can_manage = (
+            self._is_admin or quiz.created_by_id == self.request.user.id
+        )
+        if not self._can_manage and not quiz.is_published:
             self.permission_denied(self.request, message='This quiz has not been published yet.')
         return quiz
 
     def get_serializer_class(self):
         if self.request.method in permissions.SAFE_METHODS:
-            if getattr(self, '_is_admin', False):
+            if getattr(self, '_can_manage', False):
                 return GroupStudyQuizDetailSerializer
             return CandidateGroupStudyQuizDetailSerializer
         return GroupStudyQuizWriteSerializer
 
     def update(self, request, *args, **kwargs):
         quiz = self.get_object()
-        ensure_admin(quiz.group, request.user)
+        ensure_quiz_manager(quiz, request.user)
         partial = kwargs.pop('partial', False)
         serializer = self.get_serializer(quiz, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
@@ -474,7 +487,7 @@ class GroupStudyQuizDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def destroy(self, request, *args, **kwargs):
         quiz = self.get_object()
-        ensure_admin(quiz.group, request.user)
+        ensure_quiz_manager(quiz, request.user)
         quiz.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -487,7 +500,7 @@ class GroupStudyQuizAddQuestionsView(APIView):
             get_quiz_queryset(request.user, include_questions=True),
             pk=quiz_id,
         )
-        ensure_admin(quiz.group, request.user)
+        ensure_quiz_manager(quiz, request.user)
         serializer = GroupStudyQuizAddQuestionsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -509,10 +522,10 @@ class GroupStudyQuizPublishView(APIView):
 
     def post(self, request, quiz_id):
         quiz = get_object_or_404(
-            GroupStudyQuiz.objects.select_related('group'),
+            GroupStudyQuiz.objects.select_related('group', 'created_by'),
             pk=quiz_id,
         )
-        ensure_admin(quiz.group, request.user)
+        ensure_quiz_manager(quiz, request.user)
         if quiz.questions.count() == 0:
             return Response(
                 {'error': 'Cannot publish a quiz with no questions.'},
@@ -602,3 +615,118 @@ class GroupStudyQuizAttemptResultView(generics.RetrieveAPIView):
             user=self.request.user,
             is_completed=True,
         )
+
+
+# ── Leaderboard views ────────────────────────────────────────────────────────
+
+def _leaderboard_user_payload(user):
+    return {
+        'id': user.id,
+        'username': user.username,
+        'first_name': user.first_name,
+        'last_name': user.last_name,
+        'email': user.email,
+    }
+
+
+class StudyGroupLeaderboardView(APIView):
+    """Members ranked by the sum of their best score in each group quiz."""
+
+    permission_classes = [IsAuthenticatedUserOnly]
+
+    def get(self, request, group_id):
+        group = get_group_object(group_id)
+        ensure_member(group, request.user)
+
+        best_rows = (
+            GroupStudyQuizAttempt.objects.filter(
+                quiz__group=group,
+                is_completed=True,
+            )
+            .values('user_id', 'quiz_id')
+            .annotate(best_score=Max('score'))
+        )
+
+        totals = {}
+        for row in best_rows:
+            entry = totals.setdefault(
+                row['user_id'],
+                {'score': Decimal('0'), 'quizzes_attempted': 0},
+            )
+            entry['score'] += row['best_score'] or Decimal('0')
+            entry['quizzes_attempted'] += 1
+
+        users = {
+            user.id: user
+            for user in get_user_model().objects.filter(
+                id__in=list(totals.keys()),
+            )
+        }
+        ordered = sorted(
+            totals.items(),
+            key=lambda item: (
+                -item[1]['score'],
+                -item[1]['quizzes_attempted'],
+                users[item[0]].username if item[0] in users else '',
+            ),
+        )
+
+        results = []
+        for index, (user_id, entry) in enumerate(ordered, start=1):
+            user = users.get(user_id)
+            if user is None:
+                continue
+            results.append({
+                'rank': index,
+                'user': _leaderboard_user_payload(user),
+                'score': decimal_as_number(entry['score']),
+                'quizzes_attempted': entry['quizzes_attempted'],
+                'completed_at': None,
+                'is_current_user': user_id == request.user.id,
+            })
+        return Response(results)
+
+
+class GroupStudyQuizLeaderboardView(APIView):
+    """Best completed attempt per member for a single quiz."""
+
+    permission_classes = [IsAuthenticatedUserOnly]
+
+    def get(self, request, quiz_id):
+        quiz = get_object_or_404(
+            GroupStudyQuiz.objects.select_related('group'),
+            pk=quiz_id,
+        )
+        ensure_member(quiz.group, request.user)
+
+        rows = (
+            GroupStudyQuizAttempt.objects.filter(
+                quiz=quiz,
+                is_completed=True,
+            )
+            .values('user_id')
+            .annotate(best_score=Max('score'), completed_at=Min('end_time'))
+            .order_by('-best_score', 'completed_at', 'user_id')
+        )
+
+        user_ids = [row['user_id'] for row in rows]
+        users = {
+            user.id: user
+            for user in get_user_model().objects.filter(id__in=user_ids)
+        }
+
+        results = []
+        for index, row in enumerate(rows, start=1):
+            user = users.get(row['user_id'])
+            if user is None:
+                continue
+            completed_at = row['completed_at']
+            results.append({
+                'rank': index,
+                'user': _leaderboard_user_payload(user),
+                'score': decimal_as_number(row['best_score']),
+                'quizzes_attempted': 1,
+                'completed_at': completed_at.isoformat() if completed_at else None,
+                'is_current_user': row['user_id'] == request.user.id,
+            })
+        return Response(results)

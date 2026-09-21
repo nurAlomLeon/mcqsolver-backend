@@ -22,9 +22,12 @@ them, publish them to members, and chat within the group.
 
 - **Roles:**
   - `ADMIN` — the group creator (and any member promoted to admin). Can manage
-    members, create/edit/publish quizzes, and add questions.
-  - `MEMBER` — can view the group, list/publish quizzes, read messages, chat, and
-    take quizzes.
+    members and manage every quiz in the group.
+  - `MEMBER` — can view the group, create quizzes, manage quizzes they created,
+    read messages, chat, take quizzes, and view leaderboards.
+
+  Any member can create a quiz. A quiz can be edited, published, or deleted by
+  its creator or by a group admin.
 
 - **Content type:** all request/response bodies are JSON.
 
@@ -312,8 +315,8 @@ while the chat is on screen.
 
 `GET /groups/<group_id>/quizzes/`
 
-Access: any member. `ADMIN` sees drafts and published quizzes; `MEMBER` sees only
-published quizzes. Paginated summary objects:
+Access: any member. `ADMIN` sees drafts and published quizzes; `MEMBER` sees
+published quizzes plus their own drafts. Paginated summary objects:
 
 ```json
 {
@@ -330,6 +333,7 @@ published quizzes. Paginated summary objects:
   "question_count": 20,
   "maximum_score": 20,
   "attempt_status": "NOT_STARTED",
+  "created_by": { "id": 4, "username": "alice", "first_name": "Alice", "last_name": "Rahman", "email": "alice@gmail.com" },
   "created_at": "2026-09-21T08:00:00Z"
 }
 ```
@@ -342,7 +346,7 @@ requesting user). Numeric mark fields are returned as integers when whole
 
 `POST /groups/<group_id>/quizzes/`
 
-`ADMIN` only.
+Access: any member. The creator becomes the quiz owner.
 
 Request:
 
@@ -395,9 +399,10 @@ answers).
 
 `GET /quizzes/<quiz_id>/`
 
-Access: any member. `ADMIN` receives the full detail (answers include
-`is_correct` and questions include `explanation`); `MEMBER` receives the
-**candidate** version (correct answers and explanations are hidden).
+Access: any member. The quiz creator and group admins receive the full detail
+(answers include `is_correct` and questions include `explanation`); everyone
+else receives the **candidate** version (correct answers and explanations are
+hidden).
 
 Full (admin) question shape:
 
@@ -426,9 +431,10 @@ Candidate question shape omits `explanation` and `is_correct`.
 
 `PUT /quizzes/<quiz_id>/` or `PATCH /quizzes/<quiz_id>/`
 
-`ADMIN` only. Updates metadata (`name`, `description`, `start_at`, `end_at`,
-`duration_minutes`, marks, `is_published`). Question content is **not** changed
-here — use `add-questions` to append content.
+Access: the quiz creator or a group admin. Updates metadata (`name`,
+`description`, `start_at`, `end_at`, `duration_minutes`, marks, `is_published`).
+Question content is **not** changed here — use `add-questions` to append
+content.
 
 Response: the updated quiz detail object.
 
@@ -436,14 +442,15 @@ Response: the updated quiz detail object.
 
 `DELETE /quizzes/<quiz_id>/`
 
-`ADMIN` only. Response: `204 No Content`.
+Access: the quiz creator or a group admin. Response: `204 No Content`.
 
 ### Add questions to a quiz
 
 `POST /quizzes/<quiz_id>/add-questions/`
 
-`ADMIN` only. Appends questions to an existing quiz. Provide **exactly one** of
-`question_ids`, `source_quiz_id`, or `questions`:
+Access: the quiz creator or a group admin. Appends questions to an existing
+quiz. Provide **exactly one** of `question_ids`, `source_quiz_id`, or
+`questions`:
 
 ```json
 {
@@ -467,7 +474,8 @@ Response: `200` with the updated quiz detail object.
 
 `POST /quizzes/<quiz_id>/publish/`
 
-`ADMIN` only. No body. The quiz must already have at least one question.
+Access: the quiz creator or a group admin. No body. The quiz must already have
+at least one question.
 
 Response: `200`
 
@@ -582,6 +590,48 @@ Response: `200`
 
 Score is computed as:
 `correct_answers * correct_mark + wrong_answers * wrong_mark + unanswered * unanswered_mark`.
+
+---
+
+## Leaderboard
+
+### Group leaderboard
+
+`GET /groups/<group_id>/leaderboard/`
+
+Access: any member. Returns every member with at least one completed attempt,
+ranked by the sum of their **best score in each group quiz** (retakes only
+improve a score, never add to it). Ties are broken by the number of quizzes
+attempted, then username. Not paginated.
+
+```json
+[
+  {
+    "rank": 1,
+    "user": { "id": 4, "username": "alice", "first_name": "Alice", "last_name": "Rahman", "email": "alice@gmail.com" },
+    "score": 16,
+    "quizzes_attempted": 2,
+    "completed_at": null,
+    "is_current_user": false
+  },
+  {
+    "rank": 2,
+    "user": { "id": 7, "username": "bob", "first_name": "Bob", "last_name": "Hasan", "email": "bob@gmail.com" },
+    "score": 14,
+    "quizzes_attempted": 2,
+    "completed_at": null,
+    "is_current_user": true
+  }
+]
+```
+
+### Quiz leaderboard
+
+`GET /quizzes/<quiz_id>/leaderboard/`
+
+Access: any member. Best completed attempt per member for a single quiz, ranked
+by score (ties broken by who finished first). Same entry shape as above, with
+`completed_at` set and `quizzes_attempted` always `1`.
 
 ---
 
