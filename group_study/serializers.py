@@ -73,7 +73,11 @@ class StudyGroupSerializer(serializers.ModelSerializer):
 
 
 class StudyGroupDetailSerializer(StudyGroupSerializer):
-    members = StudyGroupMembershipSerializer(many=True, read_only=True)
+    members = StudyGroupMembershipSerializer(
+        source='memberships',
+        many=True,
+        read_only=True,
+    )
 
     class Meta(StudyGroupSerializer.Meta):
         fields = StudyGroupSerializer.Meta.fields + ['members']

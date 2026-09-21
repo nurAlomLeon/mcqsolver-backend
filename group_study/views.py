@@ -111,7 +111,16 @@ def get_group_list_queryset(user):
         group=OuterRef('pk'),
         user=user,
     ).values('role')[:1]
-    return StudyGroup.objects.filter(memberships__user=user).annotate(
+    # Use EXISTS instead of filter(memberships__user=...) so the membership
+    # join does not leak into the member_count aggregate (which would then
+    # only count the requesting user's own membership).
+    membership_exists = StudyGroupMembership.objects.filter(
+        group=OuterRef('pk'),
+        user=user,
+    )
+    return StudyGroup.objects.filter(
+        Exists(membership_exists),
+    ).annotate(
         member_count=Count('memberships', distinct=True),
         quiz_count=Count('quizzes', distinct=True),
         my_role=Subquery(role_subquery),

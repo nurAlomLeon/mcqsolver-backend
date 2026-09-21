@@ -91,6 +91,21 @@ class GroupStudyApiTests(TestCase):
             unanswered_mark=0,
         )
 
+    def test_group_detail_returns_members(self):
+        response = self.member_client.get(self._group_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('members', response.data)
+        self.assertEqual(len(response.data['members']), 2)
+        usernames = {m['user']['username'] for m in response.data['members']}
+        self.assertEqual(usernames, {'alice', 'bob'})
+        self.assertEqual(response.data['member_count'], 2)
+
+    def test_group_list_counts_all_members(self):
+        response = self.admin_client.get('/api/group-study/groups/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['member_count'], 2)
+
     def test_unread_message_count_and_mark_read(self):
         GroupMessage.objects.create(
             group=self.group,
