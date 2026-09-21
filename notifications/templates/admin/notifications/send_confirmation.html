@@ -1,0 +1,34 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div>
+    <p><strong>Title:</strong> {{ campaign.title }}</p>
+    <p><strong>Message:</strong> {{ campaign.message }}</p>
+    <p><strong>Audience:</strong> {{ campaign.get_audience_display }}
+       {% if campaign.course %}— {{ campaign.course.name }}{% endif %}</p>
+
+    {% if is_broadcast %}
+    <p><strong>Delivery:</strong> topic broadcast to
+       <code>{{ topic }}</code> (every subscribed device).</p>
+    {% else %}
+    <p><strong>Delivery:</strong> direct send to
+       <strong>{{ recipient_estimate }}</strong> active device(s).</p>
+    {% endif %}
+
+    {% if campaign.status == 'sent' %}
+    <p style="color: #b91c1c; font-weight: bold;">
+        This campaign was already sent on {{ campaign.sent_at }}. Confirming
+        again will send it a second time.
+    </p>
+    {% endif %}
+
+    <p>This sends immediately and cannot be undone.</p>
+
+    <form action="" method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="submit-row">
+            <input type="submit" value="Send notification now" class="default">
+        </div>
+    </form>
+</div>
+{% endblock %}

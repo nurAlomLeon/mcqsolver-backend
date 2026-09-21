@@ -1,0 +1,9 @@
+<!-- your_app/templates/admin/quiz_change_form.html -->
+{% extends "admin/change_form.html" %}
+
+{% block object-tools-items %}
+    {{ block.super }}
+    <li>
+        <a href="import-questions/" class="addlink">Import Questions from CSV</a>
+    </li>
+{% endblock %}

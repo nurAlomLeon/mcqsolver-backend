@@ -1,0 +1,49 @@
+{% extends "admin/change_form.html" %}
+{% load admin_urls %}
+
+{% block content %}
+{{ block.super }}
+
+{% if change and has_change_permission %}
+<div class="module" style="margin-top: 20px;">
+  <h2>Reorganize exams</h2>
+  <p>Set position numbers and save, or auto-number all exams in Bengali.</p>
+  <form method="post"
+        action="{% url 'admin:courses_course_reorganize_exams' original.pk %}">
+    {% csrf_token %}
+    <table>
+      <thead>
+        <tr>
+          <th>Exam</th>
+          <th>Position</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for quiz in original.quizzes.all %}
+        <tr>
+          <td>{{ quiz.name }}</td>
+          <td>
+            <input type="number"
+                   name="position_{{ quiz.id }}"
+                   value="{{ quiz.position }}"
+                   min="1"
+                   class="vIntegerField"
+                   style="width: 90px;">
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="2">No exams in this course.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="submit-row">
+      <input type="submit" name="_save_order" value="Save exam order">
+      <input type="submit" name="auto"
+             value="Auto reorganize (পরীক্ষা - ১, পরীক্ষা - ২, ...)">
+    </div>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

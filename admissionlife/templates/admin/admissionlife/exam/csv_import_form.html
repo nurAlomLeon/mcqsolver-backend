@@ -1,0 +1,36 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+
+<p>Upload a CSV file to import questions into an exam. The CSV should have columns:</p>
+<p><strong>Question Title, Answer 1, Answer 2, Answer 3, Answer 4, Correct Answer (1-4), Explanation (optional)</strong></p>
+
+<form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+
+    <fieldset>
+        <div class="form-row">
+            <label for="exam_id">Exam:</label>
+            <select name="exam_id" id="exam_id" required>
+                <option value="">-- Select an Exam --</option>
+                {% for exam in exams %}
+                <option value="{{ exam.id }}">{{ exam.batch.name }} - {{ exam.title }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label for="csv_file">CSV File:</label>
+            <input type="file" name="csv_file" id="csv_file" accept=".csv" required />
+        </div>
+    </fieldset>
+
+    <div class="submit-row">
+        <input type="submit" value="Import" class="default" />
+    </div>
+</form>
+{% endblock %}
