@@ -22,9 +22,9 @@ jobs:
           server-dir: /
           exclude: |
             /.git
-            /.github/
+            /.github/**
             **/node_modules/**
-            /exam_project/settings.py
-            /public/
-            /static/
+            exam_project/settings.py
+            public/**
+            static/**
             
