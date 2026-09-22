@@ -229,13 +229,21 @@ def notify_user(user, title, body, kind, route='', payload=None, data=None):
     )
 
 
-def notify_members(group, title, body, kind, route='', payload=None, exclude_user=None):
-    """Push + in-app notification to all group members (optionally minus one)."""
+def notify_members(group, title, body, kind, route='', payload=None, exclude_user=None,
+                   respect_chat_preference=False):
+    """Push + in-app notification to all group members (optionally minus one).
+
+    When ``respect_chat_preference`` is set, members who muted chat
+    notifications for this group are skipped.
+    """
     from notifications.models import DeviceInstallation
     from notifications.services import send_direct
 
     payload = payload or {}
-    member_ids = group.memberships.values_list('user_id', flat=True)
+    memberships = group.memberships.all()
+    if respect_chat_preference:
+        memberships = memberships.filter(notify_messages=True)
+    member_ids = memberships.values_list('user_id', flat=True)
     if exclude_user is not None:
         member_ids = member_ids.exclude(user_id=exclude_user.id)
 

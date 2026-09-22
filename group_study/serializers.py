@@ -51,6 +51,7 @@ class StudyGroupSerializer(serializers.ModelSerializer):
     quiz_count = serializers.IntegerField(read_only=True)
     unread_message_count = serializers.IntegerField(read_only=True, default=0)
     my_role = serializers.SerializerMethodField()
+    my_notify_messages = serializers.SerializerMethodField()
 
     class Meta:
         model = StudyGroup
@@ -64,12 +65,17 @@ class StudyGroupSerializer(serializers.ModelSerializer):
             'quiz_count',
             'unread_message_count',
             'my_role',
+            'my_notify_messages',
             'created_at',
             'updated_at',
         ]
 
     def get_my_role(self, obj):
         return getattr(obj, 'my_role', None)
+
+    def get_my_notify_messages(self, obj):
+        value = getattr(obj, 'my_notify_messages', None)
+        return True if value is None else bool(value)
 
 
 class StudyGroupDetailSerializer(StudyGroupSerializer):
@@ -431,3 +437,7 @@ class GroupMessageSerializer(serializers.ModelSerializer):
 
 class GroupMessageWriteSerializer(serializers.Serializer):
     body = serializers.CharField()
+
+
+class GroupMessageNotificationSerializer(serializers.Serializer):
+    notify_messages = serializers.BooleanField()

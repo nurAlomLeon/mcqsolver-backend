@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     GroupMessageListCreateView,
+    GroupMessageNotificationView,
     GroupMessageReadView,
     GroupStudyQuizAddQuestionsView,
     GroupStudyQuizAttemptResultView,
@@ -26,6 +27,7 @@ urlpatterns = [
     path('groups/<int:group_id>/members/<int:member_id>/', StudyGroupMemberDetailView.as_view(), name='group-member-detail'),
     path('groups/<int:group_id>/messages/', GroupMessageListCreateView.as_view(), name='group-message-list-create'),
     path('groups/<int:group_id>/messages/read/', GroupMessageReadView.as_view(), name='group-message-read'),
+    path('groups/<int:group_id>/messages/notifications/', GroupMessageNotificationView.as_view(), name='group-message-notifications'),
     path('groups/<int:group_id>/leaderboard/', StudyGroupLeaderboardView.as_view(), name='group-leaderboard'),
     path('groups/<int:group_id>/quizzes/', GroupStudyQuizListCreateView.as_view(), name='group-quiz-list-create'),
     path('quizzes/<int:quiz_id>/', GroupStudyQuizDetailView.as_view(), name='group-quiz-detail'),

@@ -60,6 +60,8 @@ class StudyGroupMembership(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     # Used to compute the unread chat badge. Null means "never read".
     last_read_at = models.DateTimeField(null=True, blank=True)
+    # Members can mute push/in-app notifications for this group's chat.
+    notify_messages = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['joined_at', 'id']

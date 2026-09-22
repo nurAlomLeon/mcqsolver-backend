@@ -116,6 +116,7 @@ Returns the groups the caller belongs to (paginated). Each item:
   "quiz_count": 5,
   "unread_message_count": 3,
   "my_role": "ADMIN",
+  "my_notify_messages": true,
   "created_at": "2026-09-21T08:00:00Z",
   "updated_at": "2026-09-21T08:00:00Z"
 }
@@ -125,6 +126,9 @@ Returns the groups the caller belongs to (paginated). Each item:
 
 `unread_message_count` counts chat messages from other members that arrived
 after the caller last read the group chat (their own messages never count).
+
+`my_notify_messages` is the caller's own chat notification preference for this
+group. It defaults to `true` and can be changed with the toggle endpoint below.
 
 ### Create a group
 
@@ -288,6 +292,7 @@ Response: `201` with the created message object (same shape as the list item).
 
 Every other member receives a push + in-app notification (`group_study_message`)
 with the sender name as the title and the message body (truncated to 200 chars).
+Members who turned chat notifications off for this group are skipped.
 
 Sending also marks the chat as read for the sender, so their own message never
 appears in `unread_message_count`.
@@ -306,6 +311,31 @@ Response: `200`
 
 The app calls this when the chat tab opens and whenever new messages arrive
 while the chat is on screen.
+
+### Toggle chat notifications
+
+`POST /groups/<group_id>/messages/notifications/`
+
+Access: any member. Turns push/in-app notifications for this group's chat on
+or off for the caller only. The setting is stored per membership.
+
+Request:
+
+```json
+{ "notify_messages": false }
+```
+
+| Field | Type | Required |
+|-------|------|----------|
+| `notify_messages` | boolean | yes |
+
+Response: `200`
+
+```json
+{ "detail": "Chat notifications disabled.", "notify_messages": false }
+```
+
+`my_notify_messages` in the group object reflects the updated value.
 
 ---
 

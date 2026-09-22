@@ -1,9 +1,12 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
+
+from notifications.models import DeviceInstallation, Notification, NotificationKind
 
 from .models import (
     GroupMessage,
@@ -138,6 +141,100 @@ class GroupStudyApiTests(TestCase):
         )
         response = self.member_client.get(self._group_url())
         self.assertEqual(response.data['unread_message_count'], 1)
+
+    def test_group_detail_exposes_chat_notification_preference(self):
+        response = self.member_client.get(self._group_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['my_notify_messages'])
+
+    def test_member_can_toggle_chat_notifications(self):
+        notification_url = f'{self._group_url()}messages/notifications/'
+
+        response = self.member_client.post(
+            notification_url,
+            {'notify_messages': False},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['notify_messages'])
+        self.assertFalse(
+            StudyGroupMembership.objects.get(
+                group=self.group,
+                user=self.member,
+            ).notify_messages
+        )
+        # The setting is per member and must not touch other memberships.
+        self.assertTrue(
+            StudyGroupMembership.objects.get(
+                group=self.group,
+                user=self.admin,
+            ).notify_messages
+        )
+
+        response = self.member_client.get(self._group_url())
+        self.assertFalse(response.data['my_notify_messages'])
+
+        response = self.member_client.post(
+            notification_url,
+            {'notify_messages': True},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['notify_messages'])
+
+        response = self.member_client.post(notification_url, {}, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    @patch('notifications.services.send_token_notifications')
+    def test_muted_member_does_not_receive_message_notifications(self, mock_send):
+        mock_send.return_value = (1, 0, [])
+        DeviceInstallation.objects.create(
+            user=self.admin,
+            token='token-admin',
+            is_active=True,
+        )
+        DeviceInstallation.objects.create(
+            user=self.member,
+            token='token-member',
+            is_active=True,
+        )
+
+        self.member_client.post(
+            f'{self._group_url()}messages/notifications/',
+            {'notify_messages': False},
+            format='json',
+        )
+        response = self.admin_client.post(
+            f'{self._group_url()}messages/',
+            {'body': 'Are you there?'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertFalse(
+            Notification.objects.filter(
+                user=self.member,
+                kind=NotificationKind.GROUP_STUDY_MESSAGE,
+            ).exists()
+        )
+
+        # Turning notifications back on restores delivery.
+        self.member_client.post(
+            f'{self._group_url()}messages/notifications/',
+            {'notify_messages': True},
+            format='json',
+        )
+        response = self.admin_client.post(
+            f'{self._group_url()}messages/',
+            {'body': 'Second message'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            Notification.objects.filter(
+                user=self.member,
+                kind=NotificationKind.GROUP_STUDY_MESSAGE,
+            ).exists()
+        )
 
     def test_sending_a_message_clears_the_senders_own_unread_count(self):
         GroupMessage.objects.create(

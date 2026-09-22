@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import (
+    BooleanField,
     Count,
     DateTimeField,
     Exists,
@@ -41,6 +42,7 @@ from .models import (
 from .serializers import (
     BulkGroupSubmissionSerializer,
     CandidateGroupStudyQuizDetailSerializer,
+    GroupMessageNotificationSerializer,
     GroupMessageSerializer,
     GroupMessageWriteSerializer,
     GroupStudyMemberAddSerializer,
@@ -111,6 +113,10 @@ def get_group_list_queryset(user):
         group=OuterRef('pk'),
         user=user,
     ).values('role')[:1]
+    notify_messages_subquery = StudyGroupMembership.objects.filter(
+        group=OuterRef('pk'),
+        user=user,
+    ).values('notify_messages')[:1]
     # Use EXISTS instead of filter(memberships__user=...) so the membership
     # join does not leak into the member_count aggregate (which would then
     # only count the requesting user's own membership).
@@ -124,6 +130,10 @@ def get_group_list_queryset(user):
         member_count=Count('memberships', distinct=True),
         quiz_count=Count('quizzes', distinct=True),
         my_role=Subquery(role_subquery),
+        my_notify_messages=Subquery(
+            notify_messages_subquery,
+            output_field=BooleanField(),
+        ),
         unread_message_count=get_unread_message_count_expression(user),
     ).order_by('name', 'id')
 
@@ -366,6 +376,7 @@ class GroupMessageListCreateView(generics.ListCreateAPIView):
             route='/group-study',
             payload={'group_id': group.id, 'message_id': message.id},
             exclude_user=request.user,
+            respect_chat_preference=True,
         )
 
         response_serializer = GroupMessageSerializer(message, context=self.get_serializer_context())
@@ -383,6 +394,28 @@ class GroupMessageReadView(APIView):
         return Response({
             'detail': 'Messages marked as read.',
             'unread_message_count': 0,
+        })
+
+
+class GroupMessageNotificationView(APIView):
+    """Turn chat push notifications on or off for the requesting member."""
+
+    permission_classes = [IsAuthenticatedUserOnly]
+
+    def post(self, request, group_id):
+        group = get_group_object(group_id)
+        membership = ensure_member(group, request.user)
+        serializer = GroupMessageNotificationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        membership.notify_messages = serializer.validated_data['notify_messages']
+        membership.save(update_fields=['notify_messages', 'updated_at'])
+        return Response({
+            'detail': (
+                'Chat notifications enabled.'
+                if membership.notify_messages
+                else 'Chat notifications disabled.'
+            ),
+            'notify_messages': membership.notify_messages,
         })
 
 
