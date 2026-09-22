@@ -33,7 +33,14 @@ class UserSummarySerializer(serializers.ModelSerializer):
 class StudyGroupWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudyGroup
-        fields = ['id', 'name', 'description', 'is_active']
+        fields = [
+            'id',
+            'name',
+            'description',
+            'is_active',
+            'is_public',
+            'members_can_create_quizzes',
+        ]
         read_only_fields = ['id']
 
 
@@ -60,6 +67,8 @@ class StudyGroupSerializer(serializers.ModelSerializer):
             'name',
             'description',
             'is_active',
+            'is_public',
+            'members_can_create_quizzes',
             'created_by',
             'member_count',
             'quiz_count',
@@ -79,14 +88,34 @@ class StudyGroupSerializer(serializers.ModelSerializer):
 
 
 class StudyGroupDetailSerializer(StudyGroupSerializer):
-    members = StudyGroupMembershipSerializer(
-        source='memberships',
-        many=True,
-        read_only=True,
-    )
+    """Group detail with a small member preview.
+
+    Large groups are listed page by page through the members endpoint, so the
+    detail payload stays small no matter how many people joined.
+    """
+
+    members = serializers.SerializerMethodField()
 
     class Meta(StudyGroupSerializer.Meta):
         fields = StudyGroupSerializer.Meta.fields + ['members']
+
+    def get_members(self, obj):
+        preview = getattr(obj, 'member_preview', None)
+        if preview is None:
+            preview = obj.memberships.select_related('user').order_by('joined_at', 'id')[:50]
+        return StudyGroupMembershipSerializer(preview, many=True).data
+
+
+class PublicGroupSerializer(StudyGroupSerializer):
+    """Discover-list item that also tells whether the caller already joined."""
+
+    is_member = serializers.SerializerMethodField()
+
+    class Meta(StudyGroupSerializer.Meta):
+        fields = StudyGroupSerializer.Meta.fields + ['is_member']
+
+    def get_is_member(self, obj):
+        return bool(getattr(obj, 'is_member', False))
 
 
 class GroupStudyAnswerSerializer(serializers.ModelSerializer):

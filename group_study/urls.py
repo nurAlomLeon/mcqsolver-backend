@@ -12,8 +12,11 @@ from .views import (
     GroupStudyQuizLeaderboardView,
     GroupStudyQuizListCreateView,
     GroupStudyQuizPublishView,
+    PublicGroupListView,
     StudyGroupDetailView,
+    StudyGroupJoinView,
     StudyGroupLeaderboardView,
+    StudyGroupLeaveView,
     StudyGroupListCreateView,
     StudyGroupMemberDetailView,
     StudyGroupMemberListView,
@@ -22,7 +25,10 @@ from .views import (
 
 urlpatterns = [
     path('groups/', StudyGroupListCreateView.as_view(), name='group-list-create'),
+    path('groups/public/', PublicGroupListView.as_view(), name='group-public-list'),
     path('groups/<int:group_id>/', StudyGroupDetailView.as_view(), name='group-detail'),
+    path('groups/<int:group_id>/join/', StudyGroupJoinView.as_view(), name='group-join'),
+    path('groups/<int:group_id>/leave/', StudyGroupLeaveView.as_view(), name='group-leave'),
     path('groups/<int:group_id>/members/', StudyGroupMemberListView.as_view(), name='group-member-list'),
     path('groups/<int:group_id>/members/<int:member_id>/', StudyGroupMemberDetailView.as_view(), name='group-member-detail'),
     path('groups/<int:group_id>/messages/', GroupMessageListCreateView.as_view(), name='group-message-list-create'),

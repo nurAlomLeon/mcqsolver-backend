@@ -421,3 +421,270 @@ class GroupStudyApiTests(TestCase):
             f'/api/group-study/quizzes/{quiz.id}/leaderboard/',
         )
         self.assertEqual(response.status_code, 403)
+
+    # ── Public / private groups ──────────────────────────────────────────────
+
+    def _create_public_group(self, name='Public Physics', is_active=True):
+        return StudyGroup.objects.create(
+            name=name,
+            created_by=self.admin,
+            is_public=True,
+            is_active=is_active,
+        )
+
+    def test_public_group_can_be_joined(self):
+        group = self._create_public_group()
+        url = f'/api/group-study/groups/{group.id}/join/'
+
+        response = self.member_client.post(url)
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data['is_public'])
+        self.assertTrue(
+            StudyGroupMembership.objects.filter(
+                group=group,
+                user=self.member,
+            ).exists()
+        )
+
+        # Joining twice is safe and stays a member.
+        response = self.member_client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            StudyGroupMembership.objects.filter(
+                group=group,
+                user=self.member,
+            ).count(),
+            1,
+        )
+
+        response = self.member_client.get(
+            f'/api/group-study/groups/{group.id}/',
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_private_group_cannot_be_joined(self):
+        response = self.member_client.post(f'{self._group_url()}join/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_inactive_public_group_cannot_be_joined(self):
+        group = self._create_public_group(is_active=False)
+        response = self.member_client.post(
+            f'/api/group-study/groups/{group.id}/join/',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_public_group_discovery_filters_and_searches(self):
+        public = self._create_public_group(name='Physics Public')
+        self._create_public_group(name='Physics Hidden', is_active=False)
+        StudyGroup.objects.create(
+            name='Physics Secret',
+            created_by=self.admin,
+        )
+
+        response = self.member_client.get('/api/group-study/groups/public/')
+        self.assertEqual(response.status_code, 200)
+        results = response.data['results']
+        self.assertEqual([group['name'] for group in results], ['Physics Public'])
+        self.assertFalse(results[0]['is_member'])
+        self.assertTrue(results[0]['is_public'])
+
+        response = self.member_client.get(
+            '/api/group-study/groups/public/?search=Phys',
+        )
+        self.assertEqual(
+            [group['name'] for group in response.data['results']],
+            ['Physics Public'],
+        )
+
+        # Prefix search only: a middle-of-the-name match returns nothing.
+        response = self.member_client.get(
+            '/api/group-study/groups/public/?search=ysics',
+        )
+        self.assertEqual(response.data['results'], [])
+
+        self.member_client.post(f'/api/group-study/groups/{public.id}/join/')
+        response = self.member_client.get('/api/group-study/groups/public/')
+        self.assertTrue(response.data['results'][0]['is_member'])
+        response = self.member_client.get('/api/group-study/groups/')
+        self.assertIn(
+            'Physics Public',
+            [group['name'] for group in response.data['results']],
+        )
+
+    # ── Membership rules ─────────────────────────────────────────────────────
+
+    def test_any_member_can_add_members(self):
+        outsider = User.objects.create_user(
+            username='carol',
+            email='carol@example.com',
+            password='pw12345!',
+        )
+        response = self.member_client.post(
+            f'{self._group_url()}members/',
+            {'emails': ['carol@example.com']},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['added_count'], 1)
+        self.assertTrue(
+            StudyGroupMembership.objects.filter(
+                group=self.group,
+                user=outsider,
+            ).exists()
+        )
+
+    def test_re_adding_an_admin_does_not_demote_them(self):
+        response = self.member_client.post(
+            f'{self._group_url()}members/',
+            {'emails': ['alice@example.com']},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['already_member_count'], 1)
+        self.assertEqual(
+            StudyGroupMembership.objects.get(
+                group=self.group,
+                user=self.admin,
+            ).role,
+            StudyGroupMembership.Role.ADMIN,
+        )
+
+    def test_member_cannot_remove_members(self):
+        membership = StudyGroupMembership.objects.get(
+            group=self.group,
+            user=self.admin,
+        )
+        response = self.member_client.delete(
+            f'{self._group_url()}members/{membership.id}/',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_member_can_leave_group(self):
+        outsider = User.objects.create_user(
+            username='carol',
+            email='carol@example.com',
+            password='pw12345!',
+        )
+        StudyGroupMembership.objects.create(group=self.group, user=outsider)
+        outsider_client = APIClient()
+        outsider_client.force_authenticate(outsider)
+
+        response = outsider_client.post(f'{self._group_url()}leave/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(
+            StudyGroupMembership.objects.filter(
+                group=self.group,
+                user=outsider,
+            ).exists()
+        )
+        response = outsider_client.get(self._group_url())
+        self.assertEqual(response.status_code, 404)
+
+    def test_admin_cannot_leave_group(self):
+        response = self.admin_client.post(f'{self._group_url()}leave/')
+        self.assertEqual(response.status_code, 400)
+
+    def test_members_list_is_paginated(self):
+        response = self.member_client.get(f'{self._group_url()}members/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 2)
+        self.assertEqual(len(response.data['results']), 2)
+        self.assertNotIn('members', response.data)
+
+    # ── Group settings ───────────────────────────────────────────────────────
+
+    def test_admin_can_update_group_settings(self):
+        response = self.admin_client.put(
+            self._group_url(),
+            {
+                'name': self.group.name,
+                'description': self.group.description,
+                'is_active': True,
+                'is_public': True,
+                'members_can_create_quizzes': False,
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.group.refresh_from_db()
+        self.assertTrue(self.group.is_public)
+        self.assertFalse(self.group.members_can_create_quizzes)
+
+    def test_member_cannot_update_group_settings(self):
+        response = self.member_client.put(
+            self._group_url(),
+            {
+                'name': 'Hijacked',
+                'description': '',
+                'is_active': True,
+                'is_public': True,
+                'members_can_create_quizzes': False,
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_exam_creation_follows_group_setting(self):
+        now = timezone.now()
+        payload = {
+            'name': 'Restricted exam',
+            'start_at': now.isoformat(),
+            'end_at': (now + timedelta(hours=1)).isoformat(),
+            'questions': [
+                {
+                    'question_text': 'Capital of France?',
+                    'answers': [
+                        {'text': 'Paris', 'is_correct': True},
+                        {'text': 'Rome', 'is_correct': False},
+                    ],
+                },
+            ],
+        }
+
+        response = self.member_client.post(
+            f'{self._group_url()}quizzes/',
+            payload,
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        self.group.members_can_create_quizzes = False
+        self.group.save(
+            update_fields=['members_can_create_quizzes', 'updated_at'],
+        )
+
+        response = self.member_client.post(
+            f'{self._group_url()}quizzes/',
+            payload,
+            format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+        # Admins can always create exams.
+        response = self.admin_client.post(
+            f'{self._group_url()}quizzes/',
+            payload,
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+    # ── Query budget (no N+1 / GROUP BY regressions) ─────────────────────────
+
+    def test_group_list_query_count_stays_flat(self):
+        self._create_quiz()
+        with self.assertNumQueries(2):
+            response = self.member_client.get('/api/group-study/groups/')
+        self.assertEqual(response.status_code, 200)
+
+    def test_public_group_discovery_query_count_stays_flat(self):
+        self._create_public_group()
+        with self.assertNumQueries(2):
+            response = self.member_client.get('/api/group-study/groups/public/')
+        self.assertEqual(response.status_code, 200)
+
+    def test_quiz_list_query_count_stays_flat(self):
+        self._create_quiz()
+        # group lookup + membership + pagination count + page query.
+        with self.assertNumQueries(4):
+            response = self.admin_client.get(f'{self._group_url()}quizzes/')
+        self.assertEqual(response.status_code, 200)

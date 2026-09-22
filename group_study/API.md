@@ -21,13 +21,15 @@ them, publish them to members, and chat within the group.
   registered users are allowed. Guest sessions are rejected with `401`/`403`.
 
 - **Roles:**
-  - `ADMIN` — the group creator (and any member promoted to admin). Can manage
-    members and manage every quiz in the group.
-  - `MEMBER` — can view the group, create quizzes, manage quizzes they created,
-    read messages, chat, take quizzes, and view leaderboards.
+  - `ADMIN` — the group creator. Can manage group settings, remove members,
+    and manage every quiz in the group. Cannot leave (delete instead).
+  - `MEMBER` — can view the group, add members by email, create quizzes
+    (subject to the group setting), manage quizzes they created, read messages,
+    chat, take quizzes, and view leaderboards. Can leave the group.
 
-  Any member can create a quiz. A quiz can be edited, published, or deleted by
-  its creator or by a group admin.
+  Any member can add other registered users by email. Any member can create a
+  quiz unless the group turns `members_can_create_quizzes` off. A quiz can be
+  edited, published, or deleted by its creator or by a group admin.
 
 - **Content type:** all request/response bodies are JSON.
 
@@ -111,6 +113,8 @@ Returns the groups the caller belongs to (paginated). Each item:
   "name": "Physics Study Circle",
   "description": "B.Sc. physics prep",
   "is_active": true,
+  "is_public": false,
+  "members_can_create_quizzes": true,
   "created_by": { "id": 4, "username": "alice", "first_name": "Alice", "last_name": "Rahman", "email": "alice@gmail.com" },
   "member_count": 12,
   "quiz_count": 5,
@@ -123,6 +127,12 @@ Returns the groups the caller belongs to (paginated). Each item:
 ```
 
 `my_role` is `"ADMIN"` or `"MEMBER"`.
+
+`is_public`: public groups can be found in the discover list and joined by
+anyone; private groups are invite-only.
+
+`members_can_create_quizzes`: when `false`, only group admins may create
+quizzes. Admins can change it in group settings.
 
 `unread_message_count` counts chat messages from other members that arrived
 after the caller last read the group chat (their own messages never count).
@@ -140,7 +150,9 @@ Request:
 {
   "name": "Physics Study Circle",
   "description": "B.Sc. physics prep",
-  "is_active": true
+  "is_active": true,
+  "is_public": false,
+  "members_can_create_quizzes": true
 }
 ```
 
@@ -149,6 +161,8 @@ Request:
 | `name` | string | yes | — |
 | `description` | string | no | `""` |
 | `is_active` | boolean | no | `true` |
+| `is_public` | boolean | no | `false` |
+| `members_can_create_quizzes` | boolean | no | `true` |
 
 Response: `201` with the full group object (including `members`, where the
 creator is the first `ADMIN`).
@@ -157,7 +171,7 @@ creator is the first `ADMIN`).
 
 `GET /groups/<group_id>/`
 
-Same as the list item, plus a `members` array:
+Same as the list item, plus a `members` preview (up to 50 members):
 
 ```json
 {
@@ -170,6 +184,9 @@ Same as the list item, plus a `members` array:
 ```
 
 Access: any member. `404` if not a member.
+
+For large groups use the paginated members endpoint below to page through the
+full member list.
 
 ### Update a group
 
@@ -186,6 +203,56 @@ Response: the updated group detail object.
 `ADMIN` only. Deletes the group and all its memberships, quizzes, questions,
 attempts, and messages (cascade). Response: `204 No Content`.
 
+### Discover public groups
+
+`GET /groups/public/`
+
+Access: any authenticated user. Returns active public groups the caller has
+not necessarily joined, ordered by name and paginated. Optional query params:
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `search` | string | Prefix match on the group name (index-friendly) |
+| `page` | int | Page number |
+| `page_size` | int | Page size (default 50, max 100) |
+
+Each item is the group object plus `is_member`, which tells whether the caller
+already belongs to the group:
+
+```json
+{
+  "count": 12,
+  "next": "…",
+  "previous": null,
+  "results": [
+    {
+      "id": 3,
+      "name": "Physics Public",
+      "is_public": true,
+      "is_member": false,
+      "…": "…"
+    }
+  ]
+}
+```
+
+### Join a public group
+
+`POST /groups/<group_id>/join/`
+
+Access: any authenticated user. Private groups return `403`; inactive public
+groups return `400`. Joining twice is safe: the first call returns `201`, later
+calls return `200`. New memberships start with the chat marked as read.
+
+Response: the group detail object.
+
+### Leave a group
+
+`POST /groups/<group_id>/leave/`
+
+Access: any member with the `MEMBER` role. Admins cannot leave (`400`); they
+must delete the group instead. Response: `204 No Content`.
+
 ---
 
 ## Members
@@ -194,19 +261,27 @@ attempts, and messages (cascade). Response: `204 No Content`.
 
 `GET /groups/<group_id>/members/`
 
-Access: any member. Returns an array of membership objects:
+Access: any member. Paginated (`page`, `page_size`), ordered by join date
+(oldest first). Each item is a membership object:
 
 ```json
-[
-  { "id": 10, "user": { "…": "…" }, "role": "ADMIN", "joined_at": "2026-09-21T08:00:00Z" }
-]
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    { "id": 10, "user": { "…": "…" }, "role": "ADMIN", "joined_at": "2026-09-21T08:00:00Z" }
+  ]
+}
 ```
 
 ### Add members
 
 `POST /groups/<group_id>/members/`
 
-`ADMIN` only. Adds existing registered users by email (case-insensitive).
+Access: any member (public and private groups). Adds existing registered users
+by email (case-insensitive). Re-adding an existing member never changes their
+role.
 
 Request:
 
@@ -376,7 +451,9 @@ requesting user). Numeric mark fields are returned as integers when whole
 
 `POST /groups/<group_id>/quizzes/`
 
-Access: any member. The creator becomes the quiz owner.
+Access: any member by default. When the group has
+`members_can_create_quizzes: false`, only group admins may create quizzes
+(members receive `403`). The creator becomes the quiz owner.
 
 Request:
 

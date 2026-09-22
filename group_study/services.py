@@ -55,10 +55,15 @@ def ensure_quiz_manager(quiz, user):
 
 
 def add_membership(group, user, role=StudyGroupMembership.Role.MEMBER):
-    membership, created = StudyGroupMembership.objects.update_or_create(
+    """Create the membership once; re-adding a member never changes their role.
+
+    New members start with ``last_read_at`` set so joining/being added does not
+    backfill the whole message history as unread.
+    """
+    membership, created = StudyGroupMembership.objects.get_or_create(
         group=group,
         user=user,
-        defaults={'role': role},
+        defaults={'role': role, 'last_read_at': timezone.now()},
     )
     return membership, created
 

@@ -16,6 +16,11 @@ class StudyGroup(models.Model):
         related_name='groups_created',
     )
     is_active = models.BooleanField(default=True)
+    # Public groups can be found and joined by anyone; private groups are
+    # invite-only (any member may add other members by email).
+    is_public = models.BooleanField(default=False)
+    # Admins can restrict exam creation to themselves.
+    members_can_create_quizzes = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -29,6 +34,10 @@ class StudyGroup(models.Model):
             models.Index(
                 fields=['is_active', 'name', 'id'],
                 name='group_state_name_idx',
+            ),
+            models.Index(
+                fields=['is_public', 'name', 'id'],
+                name='group_public_name_idx',
             ),
         ]
 
@@ -163,6 +172,10 @@ class GroupStudyQuiz(models.Model):
             models.Index(
                 fields=['start_at', 'end_at'],
                 name='group_quiz_window_idx',
+            ),
+            models.Index(
+                fields=['group', '-created_at'],
+                name='group_quiz_group_created_idx',
             ),
         ]
 

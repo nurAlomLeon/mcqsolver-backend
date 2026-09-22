@@ -21,6 +21,7 @@ from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, permissions, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -52,6 +53,7 @@ from .serializers import (
     GroupStudyQuizDetailSerializer,
     GroupStudyQuizSummarySerializer,
     GroupStudyQuizWriteSerializer,
+    PublicGroupSerializer,
     StudyGroupDetailSerializer,
     StudyGroupMembershipSerializer,
     StudyGroupSerializer,
@@ -108,7 +110,23 @@ def get_unread_message_count_expression(user):
     )
 
 
-def get_group_list_queryset(user):
+def _group_count_subquery(model):
+    """COUNT(*) of a group's related rows without a GROUP BY join.
+
+    Subqueries keep the outer query flat, so pagination's COUNT(*) stays an
+    index-only scan over StudyGroup instead of aggregating every related row.
+    """
+    return Subquery(
+        model.objects.filter(group=OuterRef('pk'))
+        .order_by()
+        .values('group')
+        .annotate(total=Count('id'))
+        .values('total'),
+        output_field=IntegerField(),
+    )
+
+
+def get_group_base_queryset(user):
     role_subquery = StudyGroupMembership.objects.filter(
         group=OuterRef('pk'),
         user=user,
@@ -117,32 +135,50 @@ def get_group_list_queryset(user):
         group=OuterRef('pk'),
         user=user,
     ).values('notify_messages')[:1]
-    # Use EXISTS instead of filter(memberships__user=...) so the membership
-    # join does not leak into the member_count aggregate (which would then
-    # only count the requesting user's own membership).
     membership_exists = StudyGroupMembership.objects.filter(
         group=OuterRef('pk'),
         user=user,
     )
-    return StudyGroup.objects.filter(
-        Exists(membership_exists),
-    ).annotate(
-        member_count=Count('memberships', distinct=True),
-        quiz_count=Count('quizzes', distinct=True),
+    return StudyGroup.objects.select_related('created_by').annotate(
+        member_count=Coalesce(
+            _group_count_subquery(StudyGroupMembership),
+            Value(0),
+            output_field=IntegerField(),
+        ),
+        quiz_count=Coalesce(
+            _group_count_subquery(GroupStudyQuiz),
+            Value(0),
+            output_field=IntegerField(),
+        ),
         my_role=Subquery(role_subquery),
         my_notify_messages=Subquery(
             notify_messages_subquery,
             output_field=BooleanField(),
         ),
         unread_message_count=get_unread_message_count_expression(user),
+        is_member=Exists(membership_exists),
+    )
+
+
+def get_group_list_queryset(user):
+    return get_group_base_queryset(user).filter(is_member=True).order_by('name', 'id')
+
+
+def get_public_group_queryset(user):
+    return get_group_base_queryset(user).filter(
+        is_public=True,
+        is_active=True,
     ).order_by('name', 'id')
 
 
 def get_group_detail_queryset(user):
+    # Only a preview of members travels with the group; the Members tab pages
+    # through the members endpoint.
     return get_group_list_queryset(user).prefetch_related(
         Prefetch(
             'memberships',
-            queryset=StudyGroupMembership.objects.select_related('user').order_by('joined_at', 'id'),
+            queryset=StudyGroupMembership.objects.select_related('user').order_by('joined_at', 'id')[:50],
+            to_attr='member_preview',
         ),
     )
 
@@ -153,14 +189,36 @@ def get_quiz_queryset(user, include_questions=False):
         user=user,
         is_completed=False,
     )
-    # Aggregates drop Meta.ordering (Django omits default ordering on GROUP BY),
-    # so order explicitly to keep pagination deterministic.
+    question_count_subquery = (
+        GroupStudyQuestion.objects.filter(quiz=OuterRef('pk'))
+        .order_by()
+        .values('quiz')
+        .annotate(total=Count('id'))
+        .values('total')
+    )
+    completed_attempt_count_subquery = (
+        GroupStudyQuizAttempt.objects.filter(
+            quiz=OuterRef('pk'),
+            user=user,
+            is_completed=True,
+        )
+        .order_by()
+        .values('quiz')
+        .annotate(total=Count('id'))
+        .values('total')
+    )
+    # Subquery counts avoid the joins that would otherwise force a GROUP BY over
+    # every question/attempt row of every quiz on the page.
     queryset = GroupStudyQuiz.objects.select_related('group', 'created_by').annotate(
-        question_count=Count('questions', distinct=True),
-        completed_attempt_count=Count(
-            'attempts',
-            filter=Q(attempts__user=user, attempts__is_completed=True),
-            distinct=True,
+        question_count=Coalesce(
+            Subquery(question_count_subquery, output_field=IntegerField()),
+            Value(0),
+            output_field=IntegerField(),
+        ),
+        completed_attempt_count=Coalesce(
+            Subquery(completed_attempt_count_subquery, output_field=IntegerField()),
+            Value(0),
+            output_field=IntegerField(),
         ),
         has_in_progress_attempt=Exists(active_attempt),
     ).order_by('-created_at', '-id')
@@ -258,8 +316,67 @@ class StudyGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
         return super().destroy(request, *args, **kwargs)
 
 
+class PublicGroupListView(generics.ListAPIView):
+    """Active public groups that anyone can discover and join."""
+
+    permission_classes = [IsAuthenticatedUserOnly]
+    pagination_class = StandardResultsSetPagination
+    serializer_class = PublicGroupSerializer
+
+    def get_queryset(self):
+        queryset = get_public_group_queryset(self.request.user)
+        search = (self.request.query_params.get('search') or '').strip()
+        if search:
+            # Prefix search keeps the (is_public, name, id) index usable.
+            queryset = queryset.filter(name__istartswith=search)
+        return queryset
+
+
+class StudyGroupJoinView(APIView):
+    """Self-join a public group. Private groups stay invite-only."""
+
+    permission_classes = [IsAuthenticatedUserOnly]
+
+    def post(self, request, group_id):
+        group = get_group_object(group_id)
+        if not group.is_public:
+            raise PermissionDenied(
+                'This group is private. Ask a member to add you.'
+            )
+        if not group.is_active:
+            return Response(
+                {'error': 'This group is inactive.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        _membership, created = add_membership(group, request.user)
+        group = get_group_detail_queryset(request.user).get(pk=group.pk)
+        return Response(
+            StudyGroupDetailSerializer(group, context={'request': request}).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class StudyGroupLeaveView(APIView):
+    """Members can leave a group; admins must delete it instead."""
+
+    permission_classes = [IsAuthenticatedUserOnly]
+
+    def post(self, request, group_id):
+        group = get_group_object(group_id)
+        membership = ensure_member(group, request.user)
+        if membership.role == StudyGroupMembership.Role.ADMIN:
+            return Response(
+                {'error': 'Group admins cannot leave. Delete the group instead.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        membership.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class StudyGroupMemberListView(APIView):
     permission_classes = [IsAuthenticatedUserOnly]
+    pagination_class = StandardResultsSetPagination
 
     def get_group(self):
         group = get_group_object(self.kwargs['group_id'])
@@ -269,11 +386,15 @@ class StudyGroupMemberListView(APIView):
     def get(self, request, group_id):
         group = self.get_group()
         memberships = group.memberships.select_related('user').order_by('joined_at', 'id')
-        return Response(StudyGroupMembershipSerializer(memberships, many=True).data)
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(memberships, request, view=self)
+        serializer = StudyGroupMembershipSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     def post(self, request, group_id):
         group = self.get_group()
-        ensure_admin(group, request.user)
+        # Any member can invite classmates in both public and private groups.
+        ensure_member(group, request.user)
         serializer = GroupStudyMemberAddSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -459,8 +580,15 @@ class GroupStudyQuizListCreateView(generics.ListCreateAPIView):
 
     def create(self, request, *args, **kwargs):
         group = self.get_group()
-        # Any member can create a quiz for the group.
-        ensure_member(group, request.user)
+        membership = ensure_member(group, request.user)
+        # Admins can restrict exam creation to themselves in group settings.
+        if (
+            membership.role != StudyGroupMembership.Role.ADMIN
+            and not group.members_can_create_quizzes
+        ):
+            raise PermissionDenied(
+                'Only group admins can create exams in this group.'
+            )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         question_ids = serializer.validated_data.pop('question_ids', None)
