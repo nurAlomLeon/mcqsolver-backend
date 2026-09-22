@@ -609,6 +609,14 @@ class GroupStudyApiTests(TestCase):
         self.group.refresh_from_db()
         self.assertTrue(self.group.is_public)
         self.assertFalse(self.group.members_can_create_quizzes)
+        # The response is the full group detail, not the short write payload.
+        self.assertIn('members', response.data)
+        self.assertIn('created_by', response.data)
+        self.assertIn('member_count', response.data)
+        self.assertIn('my_role', response.data)
+        self.assertIn('created_at', response.data)
+        self.assertTrue(response.data['is_public'])
+        self.assertFalse(response.data['members_can_create_quizzes'])
 
     def test_member_cannot_update_group_settings(self):
         response = self.member_client.put(

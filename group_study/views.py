@@ -308,7 +308,20 @@ class StudyGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
     def update(self, request, *args, **kwargs):
         group = self.get_object()
         ensure_admin(group, request.user)
-        return super().update(request, *args, **kwargs)
+        partial = kwargs.pop('partial', False)
+        serializer = self.get_serializer(group, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        # Respond with the full detail object, not the short write payload, so
+        # clients can refresh their group state in one round trip.
+        group = get_group_detail_queryset(request.user).get(pk=group.pk)
+        return Response(
+            StudyGroupDetailSerializer(group, context=self.get_serializer_context()).data,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         group = self.get_object()
