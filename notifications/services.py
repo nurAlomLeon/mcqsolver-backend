@@ -194,12 +194,17 @@ def dispatch_campaign(campaign, use_topic_for_all=True):
     campaign.save(update_fields=['status', 'error_message', 'updated_at'])
 
     data = {'kind': campaign.kind}
-    route = ''
-    payload = {}
+    for key, value in (campaign.payload or {}).items():
+        if value is not None:
+            data[str(key)] = value
+    route = campaign.route or ''
+    payload = dict(campaign.payload or {})
     if campaign.course_id:
         data['course_id'] = campaign.course_id
-        payload['course_id'] = campaign.course_id
-        route = '/course-detail'
+        payload.setdefault('course_id', campaign.course_id)
+        route = route or '/course-detail'
+    if route:
+        data['route'] = route
 
     is_broadcast = (
         use_topic_for_all

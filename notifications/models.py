@@ -89,6 +89,7 @@ class NotificationKind(models.TextChoices):
     NEW_COURSE_LAUNCH = 'new_course_launch', 'New course launch'
     SCHEDULED_BROADCAST = 'scheduled_broadcast', 'Scheduled broadcast'
     DAILY_MCQ = 'daily_mcq', 'Daily MCQ subscription'
+    DAILY_EXAM_REMINDER = 'daily_exam_reminder', 'Daily exam reminder'
     GROUP_STUDY_ADDED = 'group_study_added', 'Added to a study group'
     GROUP_STUDY_PUBLISH = 'group_study_publish', 'New group study quiz published'
     GROUP_STUDY_REMINDER = 'group_study_reminder', 'Group study schedule reminder'
@@ -232,6 +233,17 @@ class NotificationCampaign(models.Model):
         null=True,
         blank=True,
         help_text='Required when the audience is "Learners enrolled in a course".',
+    )
+    route = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='Optional in-app route the notification should open.',
+    )
+    payload = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Extra tap-target data, e.g. {"daily_exam_id": 12}.',
     )
     status = models.CharField(
         max_length=20,

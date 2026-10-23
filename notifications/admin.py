@@ -139,10 +139,12 @@ class NotificationCampaignAdmin(admin.ModelAdmin):
             'fields': ('title', 'message'),
         }),
         ('Targeting', {
-            'fields': ('audience', 'course'),
+            'fields': ('audience', 'course', 'route', 'payload'),
             'description': (
                 'Choose "Everyone" for a topic broadcast, or target a course\'s '
-                'enrolled learners / inactive learners for a per-device send.'
+                'enrolled learners / inactive learners for a per-device send. '
+                'Route and payload control what the app opens when the '
+                'notification is tapped.'
             ),
         }),
         ('Scheduling', {

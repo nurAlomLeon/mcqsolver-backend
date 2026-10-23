@@ -315,3 +315,11 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 # Never commit the credentials file itself; only its path lives in the
 # environment. See notifications/firebase.py for how this is consumed.
 FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH', '')
+
+# Daily Exam schedule (Asia/Dhaka). The window and duration are configurable
+# through the environment so staging can exercise the flow outside 9-11 PM.
+DAILY_EXAM_OPEN_HOUR = int(os.environ.get('DAILY_EXAM_OPEN_HOUR', 21))
+DAILY_EXAM_CLOSE_HOUR = int(os.environ.get('DAILY_EXAM_CLOSE_HOUR', 23))
+DAILY_EXAM_DURATION_MINUTES = int(os.environ.get('DAILY_EXAM_DURATION_MINUTES', 20))
+DAILY_EXAM_QUESTION_COUNT = 20
+DAILY_EXAM_TOTAL_MARKS = 20

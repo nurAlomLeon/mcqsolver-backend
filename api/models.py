@@ -312,6 +312,7 @@ class Quiz(models.Model):
         PRACTICE = 'PRACTICE', 'Practice'
         MODEL_TEST = 'MODEL_TEST', 'Model Test'
         QUESTION_BANK = 'QUESTION_BANK', 'Question Bank'
+        DAILY_EXAM = 'DAILY_EXAM', 'Daily Exam'
 
     # --- MODIFIED: Added ForeignKey to the new QuizCategory model ---
     category = models.ForeignKey(QuizCategory, on_delete=models.SET_NULL, null=True, blank=True, related_name='quizzes')
@@ -815,6 +816,149 @@ class Streak(models.Model):
         user_identifier = str(self.user.username) if self.user else f"Guest {str(self.guest_user.guest_id)}"
         target_display = self.get_target_type_display()
         return f"{user_identifier} - {target_display} - Current: {self.current_streak}, Best: {self.longest_streak}"
+
+
+# ===================================================================
+# DAILY EXAM
+# ===================================================================
+
+class DailyExam(models.Model):
+    """One shared competitive exam per Dhaka calendar date.
+
+    The quiz and its 20 questions are selected once, so every learner answers
+    the same paper and the leaderboard is comparable.
+    """
+
+    class Status(models.TextChoices):
+        UPCOMING = 'UPCOMING', 'Upcoming'
+        LIVE = 'LIVE', 'Live'
+        CLOSED = 'CLOSED', 'Closed'
+
+    exam_date = models.DateField(unique=True)
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.PROTECT,
+        related_name='daily_exams',
+    )
+    quiz = models.OneToOneField(
+        Quiz,
+        on_delete=models.PROTECT,
+        related_name='daily_exam',
+    )
+    opens_at = models.DateTimeField()
+    closes_at = models.DateTimeField()
+    total_marks = models.PositiveIntegerField(default=20)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-exam_date']
+        verbose_name = 'Daily Exam'
+        verbose_name_plural = 'Daily Exams'
+        indexes = [
+            models.Index(fields=['exam_date'], name='daily_exam_date_idx'),
+            models.Index(fields=['opens_at', 'closes_at'], name='daily_exam_window_idx'),
+        ]
+
+    def status_at(self, now=None):
+        now = now or timezone.now()
+        if now < self.opens_at:
+            return self.Status.UPCOMING
+        if now >= self.closes_at:
+            return self.Status.CLOSED
+        return self.Status.LIVE
+
+    @property
+    def status(self):
+        return self.status_at()
+
+    @property
+    def is_live(self):
+        return self.status == self.Status.LIVE
+
+    @property
+    def is_closed(self):
+        return self.status == self.Status.CLOSED
+
+    @property
+    def is_upcoming(self):
+        return self.status == self.Status.UPCOMING
+
+    def __str__(self):
+        return f'Daily Exam {self.exam_date} - {self.category.name}'
+
+
+class DailyExamAttempt(models.Model):
+    """One learner's single attempt at a DailyExam.
+
+    A unique constraint enforces the one-attempt rule at the database level.
+    ``is_ranked`` is False for guests and for late starts that do not get the
+    full exam duration, so those attempts never appear on the leaderboard.
+    """
+
+    exam = models.ForeignKey(
+        DailyExam,
+        on_delete=models.CASCADE,
+        related_name='attempts',
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='daily_exam_attempts',
+        null=True,
+        blank=True,
+    )
+    guest_user = models.ForeignKey(
+        GuestUser,
+        on_delete=models.CASCADE,
+        related_name='daily_exam_attempts',
+        null=True,
+        blank=True,
+    )
+    quiz_attempt = models.OneToOneField(
+        QuizAttempt,
+        on_delete=models.CASCADE,
+        related_name='daily_exam_attempt',
+    )
+    is_ranked = models.BooleanField(default=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    time_taken_seconds = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Daily Exam Attempt'
+        verbose_name_plural = 'Daily Exam Attempts'
+        ordering = ['-created_at']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(user__isnull=False) | models.Q(guest_user__isnull=False),
+                name='daily_exam_attempt_must_have_user_or_guest',
+            ),
+            models.CheckConstraint(
+                condition=~(
+                    models.Q(user__isnull=False) & models.Q(guest_user__isnull=False)
+                ),
+                name='daily_exam_attempt_cannot_have_both',
+            ),
+            models.UniqueConstraint(
+                fields=['exam', 'user'],
+                condition=models.Q(user__isnull=False),
+                name='unique_daily_exam_user_attempt',
+            ),
+            models.UniqueConstraint(
+                fields=['exam', 'guest_user'],
+                condition=models.Q(guest_user__isnull=False),
+                name='unique_daily_exam_guest_attempt',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['exam', 'user'], name='daily_exam_user_idx'),
+            models.Index(fields=['exam', 'guest_user'], name='daily_exam_guest_idx'),
+            models.Index(fields=['exam', 'is_ranked'], name='daily_exam_ranked_idx'),
+        ]
+
+    def __str__(self):
+        owner = self.user.username if self.user else f'Guest {self.guest_user.guest_id}'
+        return f'{owner} - {self.exam.exam_date}'
 
 
 CATEGORY_TREE_CACHE_KEYS = [

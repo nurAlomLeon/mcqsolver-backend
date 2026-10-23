@@ -1171,7 +1171,14 @@ class NotificationCampaignAdminSendTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         # One row per kind except MANUAL.
-        self.assertEqual(NotificationAutomation.objects.count(), 5)
+        expected_kinds = [
+            kind for kind, _label in NotificationKind.choices
+            if kind != NotificationKind.MANUAL
+        ]
+        self.assertEqual(
+            NotificationAutomation.objects.count(),
+            len(expected_kinds),
+        )
         self.assertNotIn(
             NotificationKind.MANUAL,
             NotificationAutomation.objects.values_list('kind', flat=True),

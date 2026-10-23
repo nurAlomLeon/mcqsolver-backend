@@ -11,8 +11,10 @@ rather than the server's own timezone.
 """
 import logging
 
+from django.conf import settings
 from django.utils import timezone
 
+from api.daily_exam_services import ensure_daily_exam
 from api.models import Question
 
 from .models import (
@@ -21,6 +23,7 @@ from .models import (
     DeviceInstallation,
     NotificationAutomation,
     NotificationCampaign,
+    NotificationDelivery,
     NotificationKind,
 )
 from .services import (
@@ -38,12 +41,16 @@ DEFAULT_TITLES = {
     NotificationKind.INACTIVITY_REMINDER: 'আপনি কি জানেন?',
     NotificationKind.NEW_COURSE_LAUNCH: 'New course available',
     NotificationKind.DAILY_MCQ: 'দৈনিক MCQ',
+    NotificationKind.DAILY_EXAM_REMINDER: 'আজকের দৈনিক পরীক্ষা',
 }
 DEFAULT_MESSAGES = {
     NotificationKind.INACTIVITY_REMINDER:
         "You haven't practiced in a while. Keep your streak alive!",
     NotificationKind.NEW_COURSE_LAUNCH: '{course_name} is now open for enrollment.',
     NotificationKind.DAILY_MCQ: '',
+    NotificationKind.DAILY_EXAM_REMINDER:
+        'আজ রাত ৯টায় {category_name} বিষয়ের দৈনিক পরীক্ষা শুরু হবে। '
+        '২০ নম্বর, ২০ মিনিট, একবারই সুযোগ।',
 }
 
 # Notification bodies must stay well under the FCM 4096-byte payload cap.
@@ -52,6 +59,9 @@ MCQ_BODY_LIMIT = 480
 
 # Must match `Routes.DAILY_MCQ_QUESTION` in lib/app/routes/app_routes.dart
 DAILY_MCQ_ROUTE = '/daily-mcq-question'
+
+# Must match `Routes.DAILY_EXAM` in lib/app/routes/app_routes.dart
+DAILY_EXAM_ROUTE = '/daily-exam'
 
 
 def pick_random_explanation():
@@ -392,7 +402,92 @@ def run_daily_mcq(now=None, force=False, dry_run=False):
     }
 
 
-# ── 4. Scheduled campaigns (admin direct + course announcements) ─────────────
+# ── 4. Daily Exam reminder ───────────────────────────────────────────────────
+
+def run_daily_exam_reminder(now=None, force=False, dry_run=False):
+    """Remind everyone about today's Daily Exam at 10 AM Asia/Dhaka.
+
+    The automation row's daytime window is seeded as 10-11, so the hourly
+    cron can only send during the 10 AM hour. The exam is generated first so
+    its category can be included in the message.
+    """
+    automation = get_automation(NotificationKind.DAILY_EXAM_REMINDER)
+    ok, reason = should_run(automation, now=now, force=force)
+    if not ok:
+        return {'kind': automation.kind, 'skipped': reason, 'sent': 0}
+
+    now = now or timezone.now()
+    exam, _created = ensure_daily_exam(now=now)
+    if exam is None:
+        return {
+            'kind': automation.kind,
+            'skipped': 'no eligible daily exam',
+            'sent': 0,
+        }
+    if exam.quiz.questions.count() != settings.DAILY_EXAM_QUESTION_COUNT:
+        return {
+            'kind': automation.kind,
+            'skipped': 'incomplete daily exam',
+            'sent': 0,
+        }
+
+    if dry_run:
+        return {
+            'kind': automation.kind,
+            'sent': 1,
+            'dry_run': True,
+            'exam_id': exam.pk,
+            'category': exam.category.name,
+        }
+
+    dedupe_key = f'exam:{exam.pk}'
+    if not claim_delivery(automation.kind, dedupe_key):
+        return {
+            'kind': automation.kind,
+            'skipped': 'already sent',
+            'sent': 0,
+        }
+
+    title = automation.title_template or DEFAULT_TITLES[automation.kind]
+    message_template = (
+        automation.message_template or DEFAULT_MESSAGES[automation.kind]
+    )
+    try:
+        body = message_template.format(category_name=exam.category.name)
+    except (KeyError, IndexError, ValueError):
+        body = message_template
+
+    campaign = NotificationCampaign.objects.create(
+        title=title,
+        message=body,
+        kind=automation.kind,
+        audience=NotificationCampaign.Audience.ALL,
+        route=DAILY_EXAM_ROUTE,
+        payload={'daily_exam_id': exam.pk},
+        status=NotificationCampaign.Status.DRAFT,
+    )
+    result = dispatch_campaign(campaign)
+    sent = 1 if result.status == NotificationCampaign.Status.SENT else 0
+
+    if sent:
+        mark_ran(automation, now)
+    else:
+        # Keep the 10 AM window retryable when Firebase is temporarily down.
+        NotificationDelivery.objects.filter(
+            kind=automation.kind,
+            dedupe_key=dedupe_key,
+        ).delete()
+
+    return {
+        'kind': automation.kind,
+        'sent': sent,
+        'campaign_id': campaign.pk,
+        'exam_id': exam.pk,
+        'category': exam.category.name,
+    }
+
+
+# ── 5. Scheduled campaigns (admin direct + course announcements) ─────────────
 
 def run_due_scheduled_campaigns(now=None, dry_run=False):
     """Send any campaign whose scheduled time has arrived.
@@ -434,6 +529,7 @@ RUNNERS = {
     NotificationKind.INACTIVITY_REMINDER: run_inactivity_reminder,
     NotificationKind.DAILY_MCQ: run_daily_mcq,
     NotificationKind.NEW_COURSE_LAUNCH: run_new_course_launch,
+    NotificationKind.DAILY_EXAM_REMINDER: run_daily_exam_reminder,
     NotificationKind.SCHEDULED_BROADCAST: run_due_scheduled_campaigns,
 }
 

@@ -2,6 +2,15 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import *
+from .daily_exam_views import (
+    DailyExamDetailView,
+    DailyExamHistoryView,
+    DailyExamLeaderboardView,
+    DailyExamResultView,
+    DailyExamStartView,
+    DailyExamSubmitView,
+    DailyExamTodayView,
+)
 
 # Create a router and register our viewsets with it.
 router = DefaultRouter()
@@ -25,6 +34,15 @@ router.register(r'streaks', StreakViewSet, basename='streak')
 # ... existing urlpatterns ...
 # Add these to your existing urlpatterns
 urlpatterns = [
+    # Daily Exam
+    path('daily-exams/today/', DailyExamTodayView.as_view(), name='daily-exam-today'),
+    path('daily-exams/history/', DailyExamHistoryView.as_view(), name='daily-exam-history'),
+    path('daily-exams/<int:exam_id>/', DailyExamDetailView.as_view(), name='daily-exam-detail'),
+    path('daily-exams/<int:exam_id>/start/', DailyExamStartView.as_view(), name='daily-exam-start'),
+    path('daily-exams/<int:exam_id>/leaderboard/', DailyExamLeaderboardView.as_view(), name='daily-exam-leaderboard'),
+    path('daily-exams/attempts/<int:attempt_id>/submit/', DailyExamSubmitView.as_view(), name='daily-exam-submit'),
+    path('daily-exams/attempts/<int:attempt_id>/result/', DailyExamResultView.as_view(), name='daily-exam-result'),
+
     path('', include(router.urls)),
     path('v2/exam-attempts/<int:attempt_id>/submit/', ModelTestSubmitV2View.as_view(), name='model-test-submit-v2'),
     path('v3/exam-attempts/<int:attempt_id>/submit-summary/', ModelTestSubmitSummaryV3View.as_view(), name='model-test-submit-summary-v3'),

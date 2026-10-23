@@ -7,12 +7,14 @@ from django.urls import path
 from django.shortcuts import render, redirect
 from django.db import transaction
 from django.http import Http404
+from django.utils import timezone
+from .daily_exam_services import ensure_daily_exam
 from .models import (
     Category, GuestUser, Label, Question, Answer, Quiz, SavedQuestion, 
     QuestionReport, PreviousYearQuiz, QuizAttempt, QuizCategory,
     UserSubmission, DailyTarget, DailyProgress, WeeklyProgress, 
     UserActivity, Streak, ModelTestTemplate, ModelTestTemplateCategory,
-    AppUpdateConfig,
+    AppUpdateConfig, DailyExam, DailyExamAttempt,
 )
 from .forms import (
     CsvImportForm, ModelTestTemplateCategoryForm,
@@ -550,3 +552,126 @@ class StreakAdmin(admin.ModelAdmin):
             return obj.user.username
         return f"Guest {obj.guest_user.guest_id}"
     get_user_identifier.short_description = 'User'
+
+
+@admin.register(DailyExam)
+class DailyExamAdmin(admin.ModelAdmin):
+    list_display = [
+        'exam_date', 'category', 'status_display', 'question_count',
+        'opens_at', 'closes_at', 'attempt_count', 'ranked_count',
+    ]
+    list_filter = ['exam_date', 'category']
+    search_fields = ['category__name', 'quiz__name']
+    readonly_fields = [
+        'exam_date', 'category', 'quiz', 'opens_at', 'closes_at',
+        'total_marks', 'created_at', 'status_display', 'question_count',
+    ]
+    actions = ['generate_today_exam', 'regenerate_selected_exams']
+
+    @admin.display(description='Status')
+    def status_display(self, obj):
+        return obj.status
+
+    @admin.display(description='Questions')
+    def question_count(self, obj):
+        return obj.quiz.questions.count()
+
+    @admin.display(description='Attempts')
+    def attempt_count(self, obj):
+        return obj.attempts.count()
+
+    @admin.display(description='Ranked')
+    def ranked_count(self, obj):
+        return obj.attempts.filter(
+            is_ranked=True,
+            submitted_at__isnull=False,
+            quiz_attempt__is_completed=True,
+        ).count()
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is None:
+            return False
+        return not obj.attempts.exists() and timezone.now() < obj.opens_at
+
+    @admin.action(description='Generate today\'s daily exam')
+    def generate_today_exam(self, request, queryset):
+        exam, created = ensure_daily_exam()
+        if exam is None:
+            self.message_user(
+                request,
+                'No eligible subcategory has enough valid questions.',
+                messages.ERROR,
+            )
+            return
+        state = 'created' if created else 'already exists'
+        self.message_user(
+            request,
+            f'Daily exam for {exam.exam_date} {state}.',
+            messages.SUCCESS,
+        )
+
+    @admin.action(description='Regenerate selected exams (before opening only)')
+    def regenerate_selected_exams(self, request, queryset):
+        now = timezone.now()
+        regenerated = 0
+        skipped = 0
+        for exam in queryset:
+            if exam.attempts.exists() or now >= exam.opens_at:
+                skipped += 1
+                continue
+            quiz = exam.quiz
+            exam.delete()
+            quiz.delete()
+            new_exam, created = ensure_daily_exam(exam_date=exam.exam_date)
+            if created:
+                regenerated += 1
+            else:
+                skipped += 1
+        self.message_user(
+            request,
+            f'Regenerated {regenerated} exam(s); skipped {skipped}.',
+            messages.SUCCESS if not skipped else messages.WARNING,
+        )
+
+
+@admin.register(DailyExamAttempt)
+class DailyExamAttemptAdmin(admin.ModelAdmin):
+    list_display = [
+        'exam', 'get_owner_identifier', 'status_display', 'score_display',
+        'is_ranked', 'time_taken_seconds', 'submitted_at', 'created_at',
+    ]
+    list_filter = ['exam__exam_date', 'is_ranked', 'submitted_at']
+    search_fields = [
+        'user__username', 'guest_user__guest_id', 'exam__category__name',
+    ]
+    readonly_fields = [
+        'exam', 'user', 'guest_user', 'quiz_attempt', 'is_ranked',
+        'submitted_at', 'time_taken_seconds', 'created_at',
+    ]
+
+    @admin.display(description='Owner')
+    def get_owner_identifier(self, obj):
+        if obj.user:
+            return obj.user.username
+        return f'Guest {obj.guest_user.guest_id}'
+
+    @admin.display(description='Status')
+    def status_display(self, obj):
+        from .daily_exam_services import attempt_status
+        return attempt_status(obj)
+
+    @admin.display(description='Score')
+    def score_display(self, obj):
+        return obj.quiz_attempt.score
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

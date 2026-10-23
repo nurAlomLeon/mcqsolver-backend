@@ -519,6 +519,7 @@ def process_model_test_submission(
         try:
             attempt = QuizAttempt.objects.select_for_update().select_related('quiz').get(
                 Q(pk=attempt_id) & user_filter
+                & Q(daily_exam_attempt__isnull=True)
             )
         except QuizAttempt.DoesNotExist:
             return Response(
@@ -1047,12 +1048,19 @@ class QuizViewSet(CachedListMixin, viewsets.ReadOnlyModelViewSet):
         queryset = super().get_queryset().filter(
             generated_for_user__isnull=True,
             generated_for_guest__isnull=True,
+        ).exclude(
+            quiz_type=Quiz.QuizType.DAILY_EXAM,
         ).select_related('category').annotate(
             question_count=models.Count('questions', distinct=True),
         )
 
         if getattr(self, 'action', None) == 'retrieve':
-            queryset = queryset.prefetch_related('questions__answers')
+            queryset = queryset.prefetch_related(
+                models.Prefetch(
+                    'questions__answers',
+                    queryset=Answer.objects.order_by('id'),
+                )
+            )
 
         # Category filtering - support both 'category' and 'category_id' parameters
         category_id = self.request.query_params.get('category') or self.request.query_params.get('category_id')
@@ -1076,8 +1084,8 @@ class QuizViewSet(CachedListMixin, viewsets.ReadOnlyModelViewSet):
 
         def build():
             queryset = quiz.questions.all().select_related('category').prefetch_related(
-                'answers',
-                'labels',
+                models.Prefetch('answers', queryset=Answer.objects.order_by('id')),
+                models.Prefetch('labels', queryset=Label.objects.order_by('id')),
             ).order_by('id')
 
             paginator = StandardResultsSetPagination()
@@ -1111,8 +1119,12 @@ class QuestionViewSet(viewsets.ReadOnlyModelViewSet):
     # return in a different order - and caching those pages would freeze the
     # inconsistency in place. 'id' matches the order the database was already
     # returning in practice, and the question_cat_id_idx index serves it.
+    # Answers must be ordered: without an explicit order the database returns
+    # them in physical order, which moves an updated row (the correct answer)
+    # to the end - making every question look like the correct option is last.
     queryset = Question.objects.all().select_related('category').prefetch_related(
-        'answers', 'labels',
+        models.Prefetch('answers', queryset=Answer.objects.order_by('id')),
+        models.Prefetch('labels', queryset=Label.objects.order_by('id')),
     ).order_by('id')
     serializer_class = QuestionSerializer
     authentication_classes = [FlexibleAuthentication]
@@ -1433,7 +1445,11 @@ class QuizResultView(generics.RetrieveAPIView):
         """
         user_filter = get_user_queryset_filter(self.request)
         return get_quiz_attempt_result_queryset(
-            QuizAttempt.objects.filter(user_filter, is_completed=True)
+            QuizAttempt.objects.filter(
+                user_filter,
+                is_completed=True,
+                daily_exam_attempt__isnull=True,
+            )
         )
 
     def retrieve(self, request, *args, **kwargs):
@@ -1527,8 +1543,14 @@ class SavedQuestionViewSet(mixins.CreateModelMixin,
         return SavedQuestion.objects.filter(user_filter).select_related(
             'question__category'
         ).prefetch_related(
-            'question__labels',
-            'question__answers'
+            models.Prefetch(
+                'question__labels',
+                queryset=Label.objects.order_by('id'),
+            ),
+            models.Prefetch(
+                'question__answers',
+                queryset=Answer.objects.order_by('id'),
+            ),
         ).distinct()
 
     def create(self, request, *args, **kwargs):
@@ -1652,7 +1674,18 @@ class ExamAttemptViewSet(viewsets.GenericViewSet):
             quiz = Quiz.objects.get(pk=pk)
         except Quiz.DoesNotExist:
             return Response({"error": "Quiz not found."}, status=status.HTTP_404_NOT_FOUND)
-        
+
+        if quiz.quiz_type == Quiz.QuizType.DAILY_EXAM:
+            # Daily exams must go through /daily-exams/<id>/start/ so the
+            # window, one-attempt rule and ranking eligibility are enforced.
+            return Response(
+                {
+                    'error': 'Use the daily exam endpoint to start this exam.',
+                    'code': 'daily_exam_endpoint_required',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user, guest_user = get_user_or_guest(request)
         if quiz.generated_for_user_id and quiz.generated_for_user_id != getattr(user, 'id', None):
             return Response(
@@ -1701,6 +1734,7 @@ class ExamAttemptViewSet(viewsets.GenericViewSet):
         try:
             attempt = QuizAttempt.objects.get(
                 Q(pk=pk) & user_filter & Q(is_completed=False)
+                & Q(daily_exam_attempt__isnull=True)
             )
         except QuizAttempt.DoesNotExist:
             return Response({"error": "Active quiz attempt not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -1749,6 +1783,7 @@ class ExamAttemptViewSet(viewsets.GenericViewSet):
         try:
             attempt = QuizAttempt.objects.select_for_update().select_related('quiz').get(
                 Q(pk=pk) & user_filter & Q(is_completed=False)
+                & Q(daily_exam_attempt__isnull=True)
             )
         except QuizAttempt.DoesNotExist:
             return Response({"error": "Active quiz attempt not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -1898,6 +1933,7 @@ class ExamAttemptViewSet(viewsets.GenericViewSet):
         try:
             attempt = QuizAttempt.objects.select_for_update().select_related('quiz').get(
                 Q(pk=pk) & user_filter & Q(is_completed=False)
+                & Q(daily_exam_attempt__isnull=True)
             )
         except QuizAttempt.DoesNotExist:
             return Response({"error": "Active quiz attempt not found."}, status=status.HTTP_404_NOT_FOUND)
