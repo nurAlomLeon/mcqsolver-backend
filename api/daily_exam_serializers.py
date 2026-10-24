@@ -1,6 +1,5 @@
 """Response builders for the Daily Exam endpoints."""
 
-from django.conf import settings
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -9,6 +8,7 @@ from .daily_exam_services import (
     attempt_is_expired,
     attempt_stats,
     attempt_status,
+    DAILY_EXAM_QUESTION_COUNT,
     daily_exam_duration,
     get_owner_attempt,
     local_date,
@@ -110,7 +110,7 @@ def build_status_payload(exam, user=None, guest_user=None, now=None):
         status == DailyExam.Status.LIVE
         and attempt is None
         and now < exam.closes_at
-        and exam_payload['question_count'] == settings.DAILY_EXAM_QUESTION_COUNT
+        and exam_payload['question_count'] == DAILY_EXAM_QUESTION_COUNT
     )
     full_duration_available = now + daily_exam_duration() <= exam.closes_at
     ranking_available = user is not None

@@ -11,10 +11,12 @@ rather than the server's own timezone.
 """
 import logging
 
-from django.conf import settings
 from django.utils import timezone
 
-from api.daily_exam_services import ensure_daily_exam
+from api.daily_exam_services import (
+    DAILY_EXAM_QUESTION_COUNT,
+    ensure_daily_exam,
+)
 from api.models import Question
 
 from .models import (
@@ -424,7 +426,7 @@ def run_daily_exam_reminder(now=None, force=False, dry_run=False):
             'skipped': 'no eligible daily exam',
             'sent': 0,
         }
-    if exam.quiz.questions.count() != settings.DAILY_EXAM_QUESTION_COUNT:
+    if exam.quiz.questions.count() != DAILY_EXAM_QUESTION_COUNT:
         return {
             'kind': automation.kind,
             'skipped': 'incomplete daily exam',

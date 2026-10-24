@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 
 from .daily_exam_services import (
     DHAKA_TZ,
+    exam_window_for_date,
     ensure_daily_exam,
     leaderboard_payload,
     select_daily_exam_category,
@@ -117,6 +118,12 @@ class DailyExamTestMixin:
 
 
 class DailyExamGenerationTests(DailyExamTestMixin, TestCase):
+    def test_exam_window_uses_the_dhaka_schedule(self):
+        opens_at, closes_at = exam_window_for_date(date(2026, 10, 19))
+
+        self.assertEqual(opens_at.astimezone(DHAKA_TZ).hour, 21)
+        self.assertEqual(closes_at.astimezone(DHAKA_TZ).hour, 23)
+
     def test_selects_a_leaf_subcategory(self):
         with patch('api.daily_exam_services.random.choice', side_effect=lambda rows: rows[0]):
             category = select_daily_exam_category()

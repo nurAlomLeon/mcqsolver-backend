@@ -1,6 +1,5 @@
 """Daily Exam API endpoints."""
 
-from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
@@ -20,6 +19,7 @@ from .daily_exam_services import (
     attempt_deadline,
     attempt_is_expired,
     attempt_status,
+    DAILY_EXAM_QUESTION_COUNT,
     ensure_daily_exam,
     finalize_expired_attempt,
     leaderboard_payload,
@@ -204,7 +204,7 @@ class DailyExamStartView(APIView):
                 {'error': 'Daily exam not found.', 'code': 'exam_not_found'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if exam.quiz.questions.count() != settings.DAILY_EXAM_QUESTION_COUNT:
+        if exam.quiz.questions.count() != DAILY_EXAM_QUESTION_COUNT:
             return Response(
                 {
                     'error': 'This daily exam is incomplete and cannot be started.',

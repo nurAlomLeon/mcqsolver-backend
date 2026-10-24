@@ -29,6 +29,20 @@ from .services import get_effective_category_ids
 DHAKA_TZ = ZoneInfo('Asia/Dhaka')
 DEADLINE_GRACE = timedelta(seconds=5)
 
+# Keep these defaults here as well as in project settings. Some production
+# deployments load a site-specific settings module that may not yet define the
+# optional Daily Exam knobs; the feature should still use the documented
+# schedule rather than crash during command/API startup.
+DAILY_EXAM_OPEN_HOUR = getattr(settings, 'DAILY_EXAM_OPEN_HOUR', 21)
+DAILY_EXAM_CLOSE_HOUR = getattr(settings, 'DAILY_EXAM_CLOSE_HOUR', 23)
+DAILY_EXAM_DURATION_MINUTES = getattr(
+    settings,
+    'DAILY_EXAM_DURATION_MINUTES',
+    20,
+)
+DAILY_EXAM_QUESTION_COUNT = getattr(settings, 'DAILY_EXAM_QUESTION_COUNT', 20)
+DAILY_EXAM_TOTAL_MARKS = getattr(settings, 'DAILY_EXAM_TOTAL_MARKS', 20)
+
 
 def local_date(now=None):
     """The current calendar date in Bangladesh."""
@@ -39,19 +53,19 @@ def exam_window_for_date(exam_date):
     """Return the aware UTC open/close datetimes for a Dhaka exam date."""
     opens_at = datetime.combine(
         exam_date,
-        time(settings.DAILY_EXAM_OPEN_HOUR, 0),
+        time(DAILY_EXAM_OPEN_HOUR, 0),
         tzinfo=DHAKA_TZ,
     )
     closes_at = datetime.combine(
         exam_date,
-        time(settings.DAILY_EXAM_CLOSE_HOUR, 0),
+        time(DAILY_EXAM_CLOSE_HOUR, 0),
         tzinfo=DHAKA_TZ,
     )
     return opens_at, closes_at
 
 
 def daily_exam_duration():
-    return timedelta(minutes=settings.DAILY_EXAM_DURATION_MINUTES)
+    return timedelta(minutes=DAILY_EXAM_DURATION_MINUTES)
 
 
 def valid_questions_queryset(category_ids):
@@ -95,7 +109,7 @@ def select_daily_exam_category(required_count=None):
     categories whose combined subtree has enough questions. This keeps the
     feature usable without silently changing the "subcategory" rule.
     """
-    required_count = required_count or settings.DAILY_EXAM_QUESTION_COUNT
+    required_count = required_count or DAILY_EXAM_QUESTION_COUNT
 
     leaf_ids = list(
         Category.objects.filter(
@@ -156,7 +170,7 @@ def ensure_daily_exam(exam_date=None, now=None, category=None, force=False):
         return None, False
 
     question_ids = category_valid_question_ids(category)
-    required_count = settings.DAILY_EXAM_QUESTION_COUNT
+    required_count = DAILY_EXAM_QUESTION_COUNT
     if len(question_ids) < required_count:
         return None, False
 
@@ -164,7 +178,7 @@ def ensure_daily_exam(exam_date=None, now=None, category=None, force=False):
     quiz = Quiz.objects.create(
         name=f'Daily Exam {exam_date} - {category.name}',
         quiz_type=Quiz.QuizType.DAILY_EXAM,
-        duration_minutes=settings.DAILY_EXAM_DURATION_MINUTES,
+        duration_minutes=DAILY_EXAM_DURATION_MINUTES,
         correct_mark=Decimal('1.00'),
         wrong_mark=Decimal('0.00'),
         unanswered_mark=Decimal('0.00'),
@@ -179,7 +193,7 @@ def ensure_daily_exam(exam_date=None, now=None, category=None, force=False):
                 quiz=quiz,
                 opens_at=opens_at,
                 closes_at=closes_at,
-                total_marks=settings.DAILY_EXAM_TOTAL_MARKS,
+                total_marks=DAILY_EXAM_TOTAL_MARKS,
             )
     except IntegrityError:
         # Another worker generated the same day's exam first. Drop our
